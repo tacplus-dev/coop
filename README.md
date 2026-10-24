@@ -44,7 +44,7 @@ Run ids are ULIDs; the thread id is the run id.
 `Config.mode`:
 
 - `MODE_MOCK` — no Job and no identity: the coop itself is the pigeon. On the dog's first task
-  it says `Ready`, marks the run `RUNNING`, then answers with the kind's `mock_result` (or an
+  it says `Ready`, marks the run `RUNNING`, then answers with the kind's `mock_result`, a `pigeon.FromPigeon` in the coop's config (or an
   `OK` result when the kind has none). This is slice 1 and what the proof fleet runs.
 - `MODE_JOBS` — a Kubernetes Job per pigeon with a minted identity. Not built yet; the coop
   refuses the mode rather than pretending.

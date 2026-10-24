@@ -93,10 +93,9 @@ func newHarness(t *testing.T, cfg *pb.Config) *harness {
 }
 
 func mockCfg() *pb.Config {
-	ready := &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
+	pong := &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
 		Kind: "echo.ping", Status: pigeon_pb.ResultStatus_RESULT_STATUS_OK, Result: []byte("pong"),
 	}}}
-	raw, _ := proto.Marshal(ready)
 	return &pb.Config{
 		Mode:                 pb.Mode_MODE_MOCK,
 		MaxLiveRuns:          32,
@@ -104,7 +103,7 @@ func mockCfg() *pb.Config {
 		ReadyTimeoutMs:       60_000,
 		Kinds: []*pb.Kind{{
 			Name: "echo.ping", DomainCeiling: []string{"*.example.com", "api.other.org"},
-			MaxDeadlineMs: 600_000, MaxBudgetMicros: 1_000_000, MockResult: raw,
+			MaxDeadlineMs: 600_000, MaxBudgetMicros: 1_000_000, MockResult: pong,
 		}},
 	}
 }

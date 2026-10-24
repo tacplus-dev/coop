@@ -465,6 +465,9 @@ func (s *Server) nextSeq(runID string) int64 {
 // mockPigeon answers a task with the kind's mock_result and ignores the rest,
 // marking the run RUNNING first as a real pigeon's Ready would.
 func (s *Server) mockPigeon(ctx context.Context, run *pb.LiveRun, m *pb.PigeonMessage, kind *pb.Kind) error {
+	if kind == nil {
+		return s.gone(ctx, m, "failed") // the kind left the config under a live run
+	}
 	var to pigeon_pb.ToPigeon
 	if err := proto.Unmarshal(m.GetBody(), &to); err != nil {
 		return nil // not ours to judge; a real pigeon would fail the task
@@ -480,19 +483,21 @@ func (s *Server) mockPigeon(ctx context.Context, run *pb.LiveRun, m *pb.PigeonMe
 			return err
 		}
 	}
-	var from pigeon_pb.FromPigeon
-	if kind == nil || len(kind.GetMockResult()) == 0 || proto.Unmarshal(kind.GetMockResult(), &from) != nil {
-		from = pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
+	var from *pigeon_pb.FromPigeon
+	if kind.GetMockResult() != nil {
+		from = proto.Clone(kind.GetMockResult()).(*pigeon_pb.FromPigeon)
+	} else {
+		from = &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
 			Kind: run.GetKind(), ModeUsed: pigeon_pb.RunMode_RUN_MODE_SCRIPT, Status: pigeon_pb.ResultStatus_RESULT_STATUS_OK,
 		}}}
 	}
-	if r := from.GetResult(); r != nil && to.GetTask().GetKind() != run.GetKind() {
-		from = pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
+	if to.GetTask().GetKind() != run.GetKind() {
+		from = &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Result{Result: &pigeon_pb.PigeonResult{
 			Kind: run.GetKind(), ModeUsed: pigeon_pb.RunMode_RUN_MODE_SCRIPT, Status: pigeon_pb.ResultStatus_RESULT_STATUS_FAILED,
 			Failure: &pigeon_pb.Failure{Code: pigeon_pb.FailureCode_FAILURE_CODE_INVALID_TASK, Detail: "task names kind " + to.GetTask().GetKind()},
 		}}}
 	}
-	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, &from, nil)
+	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, from, nil)
 }
 
 // ---------------------------------------------------------------- runners
