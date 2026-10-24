@@ -1,0 +1,19 @@
+# The coop: the fleet's one door to pigeons — sandboxed, short-lived browser
+# workloads a tenant's service (a "dog") asks for by kind. Design:
+# schematic/looper/schematic/decisions/a30-a31-pigeons-design-2026-10-02.md.
+kind: service
+language: go
+src: proto
+depends:
+  # kernel.Mint: MintWorkload/RevokeWorkload for a pigeon's identity (slice 2).
+  - kernel
+  # the PigeonMessage topic and the PigeonRun record publish through eventbus.
+  - eventbus
+  # PigeonRun records are stored by stratum.
+  - stratum
+# pkg is derived from go.mod; the output segment must be "tacplus".
+output-dir: tacplus
+output-name: tacplus
+header: |
+  Copyright (c) 2026 Jody Scott
+  SPDX-License-Identifier: Apache-2.0
