@@ -210,6 +210,23 @@ The identity question put to Jody (2026-10-25), now closed:
   workload resolves to its parent service's delegate (the ancestor rule).
   To be confirmed on the fleet before coding.
 
+**Deadline expiry proven, 2026-10-25 ~03:15 MDT:** `seatrials pingpigeon
+--keep` (tenantecho's PingPigeon.keep leaves the run uncancelled) returned
+its echo; the coop's tick ended the run `END_REASON_DEADLINE` ~35 s after
+creation (30 s deadline + tick) and the Job was gone. The coop now logs
+every run's end with its reason. Still untested live: the ready-timeout
+path (needs a pigeon that never says Ready).
+
+**pigeon → pigeonhost (2026-10-25 ~03:20 MDT):** the host's proto was
+package `pigeon`, the same package as the shared protocol
+(`shared/pigeon.proto`); tacplus's Rust model resolves a package to one
+directory, so the gateway's generated types pointed at the wrong module and
+the gateway image failed to build. The service, its proto, binary and image
+are `pigeonhost` (registry id 107 renamed; repo stays
+github.com/tacplus-dev/pigeon). Note for tacplus: one proto package across
+two directories is not supported by the Rust generator; the Go generator
+accepted it silently.
+
 Also tonight, outside the coop but found through it:
 - letsencrypt ran its own loop and never served gRPC; the launcher killed it
   every 5 minutes. It runs under the ServiceManager now (letsencrypt
