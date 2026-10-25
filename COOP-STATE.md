@@ -159,6 +159,17 @@ SA can only read API discovery, and the pod mounts no token at all. Not yet
 tested live: deadline expiry (needs a dog that does not cancel) and the
 ready-timeout path.
 
+**Identity option 1 built (2026-10-25 ~01:10 MDT, Jody asleep; he said
+"build toward 1 unless the fleet shows a better path", and it did not):**
+tacplus `WorkloadMintRequest.parent_spiffe_id` (sys tokenrequest, 19bfe39);
+kernel `Delegate.workload_broker` and the rules in `doWorkloadMint` /
+`doWorkloadRevoke` — only a broker may name a parent, the parent must be a
+service not a workload, a broker may revoke any workload (kernel 99b95ab,
+WorkloadBrokerTest); the coop passes the dog as parent (coop a041e04); the
+fleet marks the coop delegate `workload_broker: true`. Expected pigeon
+identity: `/tenants/<t>/services/tenantecho/workloads/pigeon-<run>`, in the
+dog's tenant. Proof pending the rebuild (kernel, coop, pigeon images).
+
 Open, and the identity question put to Jody (2026-10-25):
 - **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
   the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
