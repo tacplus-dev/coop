@@ -242,6 +242,15 @@ Also tonight, outside the coop but found through it:
   read, by the coop. Proposed as a session (card "stratum: record query
   handles are node-local").
 
+- **A kernel restart drops the gateway's Let's Encrypt cert** (seen 09:50Z):
+  the gateway watches kernel's LetsEncryptState.cert_data, a kernel-hosted
+  root that does not survive a kernel restart; letsencrypt refills it only
+  on its hourly renewal tick (or on its own restart, which orders a new
+  certificate). Until then a restarted gateway serves the cluster-CA cert and
+  every client fails TLS. The durable copy is the stratum record, which the
+  query defect above keeps letsencrypt from reading. Proposed as a session
+  with the stratum one in view.
+
 Next:
 - Slice 2 remainder: a live deadline-expiry and ready-timeout test (needs a
   dog that does not cancel), and the pigeon's locality token (kernel's
