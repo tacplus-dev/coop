@@ -81,6 +81,44 @@ way: CancelPigeonRequest.reason must be a defined value (the dog sent
 UNSPECIFIED and swallowed the error, so runs lived to their deadline), and
 the four items above.
 
+## 2026-10-25 — slice 2 in flight (Jobs, no internet)
+
+Built, pushed, composing into seatrials:
+- **coop JobRunner** (internal/coop/jobs.go): per run, MintWorkload (terminal,
+  exp ≤ min(deadline, 300 s)), a Secret `pigeon-<run>` with the bootstrap
+  token and the coop's own bootstrap config, a Job `pigeon-<run>` locked down
+  per A30 §3.3 (no k8s identity, non-root, read-only root, caps dropped,
+  kind's limits, deadline + 30 s backstop, ttl 60 s), Secret owned by the Job.
+  Stop deletes foreground and revokes. Tick ends a run whose Job failed or
+  completed. The first config reconciles Jobs against live runs.
+- **operator**: `app_services.coop` renders `<fleet>-pigeons` with default-deny
+  and egress only to DNS, kernel and eventbus (by rendered app labels), a
+  ResourceQuota, a Role for the coop's SA there, and a projected API token on
+  the coop pod (operator 41116fe).
+- **pigeon** (github.com/tacplus-dev/pigeon, registry 107): the generic host.
+  Env from the Job (PIGEON_RUN_ID/THREAD_ID/TENANT/KIND/CALLER), identity from
+  KERNEL_BOOTSTRAP_TOKEN_FILE, Ready then tasks then results on its thread,
+  exits when the coop says ended. Built-in kind echo.ping.
+- **thread auth**: PigeonMessage publish/subscribe admit
+  `[^/]+/workloads/pigeon-[a-z0-9]+` beside "*" ("*" never admits a workload).
+- Protocol: FAILURE_CODE_SCRIPT_FAILED added.
+
+Open, and the identity question put to Jody (2026-10-25):
+- **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
+  the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
+  the coop a token with sub = dog (Grants are user delegations). Options:
+  (1) kernel gains `parent_spiffe_id` on MintWorkload, honoured only for a
+  configured workload broker (the coop) — recommended, matches A30 §3.2;
+  (2) the dog mints and hands the bootstrap to the coop in CreatePigeon;
+  (3) mint under the coop (system identity, no tenant) — what the runner does
+  until (1) lands, behind the one Mint call.
+- **A workload has no delegate.** Kernel resolves a subject's delegate by its
+  full service path; a workload's path keeps `/workloads/<child>`
+  (SubjectPath), so `findDelegateBySubject` misses and the pigeon is not S2S:
+  it can mint no token for eventbus or kernel. Expected kernel change: a
+  workload resolves to its parent service's delegate (the ancestor rule).
+  To be confirmed on the fleet before coding.
+
 Next:
 - Slice 2: MODE_JOBS — client-go Job per pigeon, MintWorkload identity, the
   lease file (`lease_names` → FailedPrecondition until then), pigeons
