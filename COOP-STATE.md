@@ -130,6 +130,24 @@ Learned from the first real pigeons on seatrials (2026-10-25, in order):
   shutdown (registry-and-floor, after f65ffc2). pigeon.proto's `Thread`
   message carries only the bindings.
 
+- A pigeon Job must pull its image Always: the fleet names images by a
+  mutable tag and the kubelet kept a stale pigeon.
+- The chassis advertises os.Hostname() as its health endpoint and kernel
+  requires an IP or FQDN; a Job pod's name is neither, and an FQDN hostname
+  (hostname + subdomain + setHostnameAsFQDN) came out longer than a hostname
+  may be. tacplus's Go service manager now honours SERVICE_ADVERTISE_HOST
+  when listening on a wildcard; the Job sets it from status.podIP.
+  (Go only; Java/Rust get the same variable when they host workloads.)
+- With that, the pigeon reaches SERVING. Its eventbus publish and
+  subscribe then failed with "bootstrap response missing refresh_token": a
+  workload's first exchange turns the one-shot bootstrap token into a
+  refresh token; later renewals present it and kernel answers a
+  service-typed refresh with an access token alone, while the Go minter
+  demanded a new refresh token every time. tacplus now keeps the held
+  refresh token (registry-and-floor after e33ad50). So the "no delegate"
+  worry was not the failure mode; whether kernel authorises an eventbus
+  audience for the workload is the next thing the run will show.
+
 Open, and the identity question put to Jody (2026-10-25):
 - **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
   the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
