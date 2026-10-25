@@ -103,6 +103,33 @@ Built, pushed, composing into seatrials:
   `[^/]+/workloads/pigeon-[a-z0-9]+` beside "*" ("*" never admits a workload).
 - Protocol: FAILURE_CODE_SCRIPT_FAILED added.
 
+Learned from the first real pigeons on seatrials (2026-10-25, in order):
+- The coop's Role grants secrets create/get/delete, not update: the Secret
+  is now created after the Job, born with its ownerReference.
+- The tick checked a run still in REQUESTED (CreatePigeon between recording
+  and starting) and read the missing Job as gone. REQUESTED is left alone
+  until the ready timeout.
+- The Secret's files were root's 0400; the pigeon runs as 65532. fsGroup
+  65532 and mode 0440.
+- From the pigeons namespace the fleet's bare names (kernel-0.kernel,
+  eventbus0, as the bootstrap config and ServiceHealthState carry them)
+  resolve to nothing: the pod gets `<fleet ns>.svc.cluster.local` as a DNS
+  search domain, so nothing else changes.
+- **The workload's bootstrap exchange works with no delegate.** Kernel took
+  the minted bootstrap token, issued the pigeon's tokens and its TLS cert
+  (X509Mint) for `/system/services/coop/workloads/pigeon-<run>`. So the
+  "a workload has no delegate" worry below is narrower than written: it
+  bites, if at all, on service-audience tokens (eventbus) — to be seen.
+- Kernel refused the pigeon's read of `pigeon.PigeonConfigState.config`
+  (a workload is not the service "pigeon"), and it is right: a pigeon has
+  no config root; its parameters are the Job's env. tacplus did not model
+  that shape — a program with only event bindings got no service manager
+  at all ("a CLI tool"). tacplus now treats an actor whose own proto
+  declares event_publish/event_watch as a WORKLOAD: health state injected,
+  service manager with publishers and subscriptions, handler = health +
+  shutdown (registry-and-floor, after f65ffc2). pigeon.proto's `Thread`
+  message carries only the bindings.
+
 Open, and the identity question put to Jody (2026-10-25):
 - **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
   the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
