@@ -57,7 +57,12 @@ type JobRunner struct {
 	// same cluster, CAs and kernel endpoints a pigeon needs, copied into each
 	// run's Secret.
 	Bootstrap []byte
-	Now       func() time.Time
+	// FleetNamespace is the namespace the fleet's services run in. The
+	// bootstrap config and ServiceHealthState name them bare (kernel-0.kernel,
+	// eventbus0), which resolve only from that namespace, so each pigeon pod
+	// gets it as a DNS search domain.
+	FleetNamespace string
+	Now            func() time.Time
 }
 
 func (r *JobRunner) now() time.Time {
@@ -75,6 +80,9 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 	ns := cfg.GetPigeonsNamespace()
 	if ns == "" {
 		return "", errors.New("coop config names no pigeons_namespace")
+	}
+	if r.FleetNamespace == "" {
+		return "", errors.New("the runner knows no fleet namespace; pigeons could not resolve kernel or eventbus")
 	}
 	if kind.GetImage() == "" {
 		return "", fmt.Errorf("kind %s has no image", kind.GetName())
@@ -115,6 +123,7 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptr.To(false),
+					DNSConfig:                    &corev1.PodDNSConfig{Searches: []string{r.FleetNamespace + ".svc.cluster.local"}},
 					SecurityContext: &corev1.PodSecurityContext{
 						// The Secret's files are root's; fsGroup makes them the pod's
 						// group's, which the 0440 mode lets the pigeon read.

@@ -54,7 +54,7 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewClientset()
 	mint := &fakeMint{}
-	r := &JobRunner{Client: client, Mint: mint, Bootstrap: []byte("endpoints: []\n"), Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	r := &JobRunner{Client: client, Mint: mint, Bootstrap: []byte("endpoints: []\n"), FleetNamespace: "schematic", Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
 	cfg := jobsCfg()
 	run := liveRun("01abc", pb.RunState_RUN_STATE_REQUESTED)
 
@@ -91,6 +91,9 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	}
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatal("a pigeon must hold no Kubernetes identity")
+	}
+	if pod.DNSConfig == nil || len(pod.DNSConfig.Searches) != 1 || pod.DNSConfig.Searches[0] != "schematic.svc.cluster.local" {
+		t.Fatalf("the fleet's bare service names must resolve from the pigeons namespace: %v", pod.DNSConfig)
 	}
 	if *pod.SecurityContext.FSGroup != 65532 || *pod.Volumes[0].Secret.DefaultMode != 0o440 {
 		t.Fatalf("the pigeon (uid 65532) must be able to read its Secret: fsGroup %v mode %o", pod.SecurityContext.FSGroup, *pod.Volumes[0].Secret.DefaultMode)
@@ -134,7 +137,7 @@ func TestJobRunnerStopCheckReconcile(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewClientset()
 	mint := &fakeMint{}
-	r := &JobRunner{Client: client, Mint: mint, Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	r := &JobRunner{Client: client, Mint: mint, FleetNamespace: "schematic", Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
 	cfg := jobsCfg()
 	run := liveRun("01abc", pb.RunState_RUN_STATE_REQUESTED)
 	id, err := r.Start(ctx, cfg, run, cfg.Kinds[0], nil)

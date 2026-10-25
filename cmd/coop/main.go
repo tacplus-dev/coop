@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -128,9 +129,17 @@ func jobRunner(s *sm.ServiceManager) coop.Runner {
 		zap.L().Warn("reading BOOTSTRAP_CONFIG for pigeons; MODE_JOBS unavailable", zap.Error(err))
 		return nil
 	}
+	// The projected API token volume carries this pod's namespace, which is
+	// the fleet's.
+	ns, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		zap.L().Warn("reading the pod's namespace; MODE_JOBS unavailable", zap.Error(err))
+		return nil
+	}
 	return &coop.JobRunner{
-		Client:    client,
-		Mint:      s.Grpc().Clients().Services().MintClient(),
-		Bootstrap: bootstrap,
+		Client:         client,
+		Mint:           s.Grpc().Clients().Services().MintClient(),
+		Bootstrap:      bootstrap,
+		FleetNamespace: strings.TrimSpace(string(ns)),
 	}
 }
