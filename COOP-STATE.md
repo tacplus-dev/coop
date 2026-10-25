@@ -56,7 +56,10 @@ Decisions made while building:
   what A30 §3.4 specified; the field was named `sender` and so never
   stamped. Renamed in place (field 10, `(spec.principal)` kept as the
   declaration); the coop, the dog and the pigeon no longer stamp
-  themselves. Supersedes the note below. Proof pending the rebuild.
+  themselves. Supersedes the note below. **Proven 2026-10-25 ~03:10 MDT**:
+  both tenants' pingpigeon pass with eventbus stamping the sender (the coop
+  accepts the dog's task only because the stamped spiffe_id is the caller),
+  no "dropping message" warning, no rejected event.
 - (superseded) **sender is self-reported, for now.** The wrapper stamps `(spec.principal)`
   on RPC requests from the caller's token, but nothing stamps it on a
   published event: the dog's message reached the coop with no sender and was
@@ -206,6 +209,21 @@ The identity question put to Jody (2026-10-25), now closed:
   it can mint no token for eventbus or kernel. Expected kernel change: a
   workload resolves to its parent service's delegate (the ancestor rule).
   To be confirmed on the fleet before coding.
+
+Also tonight, outside the coop but found through it:
+- letsencrypt ran its own loop and never served gRPC; the launcher killed it
+  every 5 minutes. It runs under the ServiceManager now (letsencrypt
+  5f4096f) and the operator seeds its Config into kernel (operator), 0
+  restarts past the kill window.
+- **stratum record queries are node-local** (RecordMapImplGenerator keeps
+  handles in a per-process map) while the generated client fails over among
+  the three stratum nodes mid-query → "unknown query_id". letsencrypt
+  therefore cannot restore its certificate on boot and ORDERS A NEW ONE AND
+  A NEW ACME ACCOUNT EVERY RESTART (Let's Encrypt: 5 duplicates/week,
+  10 accounts/3 h) — do not restart letsencrypt casually. doppelganger's
+  context reads ride the same plane; the coop's PigeonRun is written, not
+  read, by the coop. Proposed as a session (card "stratum: record query
+  handles are node-local").
 
 Next:
 - Slice 2 remainder: a live deadline-expiry and ready-timeout test (needs a
