@@ -95,6 +95,9 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatal("a pigeon must hold no Kubernetes identity")
 	}
+	if pod.Hostname != "pigeon-01abc" || pod.Subdomain != "pigeons" || pod.SetHostnameAsFQDN == nil || !*pod.SetHostnameAsFQDN {
+		t.Fatalf("the pigeon's hostname must be an FQDN for its health report: %q %q %v", pod.Hostname, pod.Subdomain, pod.SetHostnameAsFQDN)
+	}
 	if pod.DNSConfig == nil || len(pod.DNSConfig.Searches) != 1 || pod.DNSConfig.Searches[0] != "schematic.svc.cluster.local" {
 		t.Fatalf("the fleet's bare service names must resolve from the pigeons namespace: %v", pod.DNSConfig)
 	}
