@@ -59,8 +59,8 @@ Decisions made while building:
   tacplus/eventbus follow-up.
 - **Idempotency is per caller.** Same caller + same `idempotency_key` returns
   the same run; another caller's key is another run.
-- **A ping's run ends with the ping.** tenantecho cancels the run when
-  PingPigeon returns, so a proof cannot fill the tenant's live cap.
+- **A ping's run ends with the ping.** tenantecho cancels the run (reason
+  DONE) when PingPigeon returns, so a proof cannot fill the tenant's live cap.
 
 Proof path: `seatrials pingpigeon --as <tenant pair>` → gateway →
 tenantecho-<tenant>.PingPigeon → coop.CreatePigeon (S2S) → TO_PIGEON task on
@@ -71,8 +71,17 @@ Fleet: coop joined fleet-seatrials (`deploy/bootstrap/services/coop.yaml`,
 MODE_MOCK, kind echo.ping). Images coop, tenantecho, kernel, eventbus,
 stratum, gateway rebuilt for the new topic/record/Config/RPC.
 
+**Proven 2026-10-25 00:5xZ on seatrials** (fleet-seatrials b632567, coop
+a5d4056, tenantecho 794a3ac, tacplus f65ffc2): `seatrials pingpigeon --as
+alpha` and `--as beta` each returned result "pong", pigeon
+spiffe://local.dev/system/services/coop, served_by the caller's own tenant
+instance; the coop log shows one CreatePigeon and one CancelPigeon per ping
+and eventbus rejected no events. Two more defects were found and fixed on the
+way: CancelPigeonRequest.reason must be a defined value (the dog sent
+UNSPECIFIED and swallowed the error, so runs lived to their deadline), and
+the four items above.
+
 Next:
-- Prove the round trip on seatrials and record the result here.
 - Slice 2: MODE_JOBS — client-go Job per pigeon, MintWorkload identity, the
   lease file (`lease_names` → FailedPrecondition until then), pigeons
   namespace RBAC. Then the generic pigeon host.
