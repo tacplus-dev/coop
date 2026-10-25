@@ -39,11 +39,16 @@ type RunState interface {
 }
 
 // Runner starts and stops the thing that is a pigeon: a Kubernetes Job with
-// a minted identity (slice 2), or nothing at all in MOCK mode. It returns the
-// pigeon's SPIFFE id, which the dog expects FROM_PIGEON messages from.
+// a minted identity (JobRunner), or nothing at all in MOCK mode. Start returns
+// the pigeon's SPIFFE id, which the dog expects FROM_PIGEON messages from.
+// Check says whether the pigeon ended on its own, and how; Reconcile, at the
+// coop's start, drops what has no live run and returns the live runs that
+// have no pigeon.
 type Runner interface {
-	Start(ctx context.Context, run *pb.LiveRun, kind *pb.Kind, task []byte) (pigeonSpiffeID string, err error)
-	Stop(ctx context.Context, run *pb.LiveRun) error
+	Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, kind *pb.Kind, task []byte) (pigeonSpiffeID string, err error)
+	Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) error
+	Check(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) (ended bool, reason pb.EndReason, detail string, err error)
+	Reconcile(ctx context.Context, cfg *pb.Config, live map[string]*pb.LiveRun) (missing []*pb.LiveRun, err error)
 }
 
 // Server is the coop.
@@ -53,8 +58,8 @@ type Server struct {
 	Publish    func(context.Context, *pb.PigeonMessage) error
 	PublishRun func(context.Context, *pb.PigeonRun) error
 	Runs       RunState
-	// Jobs runs pigeons in MODE_JOBS; nil until slice 2, which refuses the
-	// mode rather than pretending.
+	// Jobs runs pigeons in MODE_JOBS; nil when the coop has no Kubernetes
+	// client, and the mode is then refused rather than pretended.
 	Jobs Runner
 	// Self is this coop's own SPIFFE id: the sender of FROM_COOP messages and,
 	// in MOCK mode, the mock pigeon's identity.
@@ -65,6 +70,8 @@ type Server struct {
 	cfg *pb.Config
 	// seqs is the next FROM_COOP seq per run, this instance's.
 	seqs map[string]int64
+	// reconciled: the runner has been reconciled against live runs once.
+	reconciled bool
 }
 
 var _ sm.Handler = (*Server)(nil)
@@ -86,7 +93,36 @@ func (s *Server) CoopConfig(cfg *pb.Config) error {
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := s.reconcile(ctx, cfg); err != nil {
+		return err
+	}
 	return s.applyPauses(ctx, cfg)
+}
+
+// reconcile, once, on the first config: the runner drops what has no live
+// run, and every live run with no pigeon ends FAILED (A30 §3.3, coop restart).
+func (s *Server) reconcile(ctx context.Context, cfg *pb.Config) error {
+	s.mu.Lock()
+	done := s.reconciled
+	s.reconciled = true
+	s.mu.Unlock()
+	if done || cfg.GetMode() != pb.Mode_MODE_JOBS || s.Jobs == nil {
+		return nil
+	}
+	all, err := s.Runs.All(ctx)
+	if err != nil {
+		return fmt.Errorf("reading live runs: %w", err)
+	}
+	missing, err := s.Jobs.Reconcile(ctx, cfg, all)
+	if err != nil {
+		return err
+	}
+	for _, run := range missing {
+		if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "no pigeon after coop restart"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) CoopStateConfig(*pb.Config) error       { return nil }
@@ -166,7 +202,7 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 		return nil, status.Error(codes.FailedPrecondition, "coop config names no mode")
 	}
 	if cfg.GetMode() == pb.Mode_MODE_JOBS && s.Jobs == nil {
-		return nil, status.Error(codes.FailedPrecondition, "MODE_JOBS is not built yet; run the coop in MODE_MOCK")
+		return nil, status.Error(codes.FailedPrecondition, "MODE_JOBS needs a Kubernetes client; this coop has none")
 	}
 
 	all, err := s.Runs.All(ctx)
@@ -216,7 +252,7 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 	}
 
 	runner := s.runner(cfg)
-	pigeonID, err := runner.Start(ctx, run, kind, req.GetTask())
+	pigeonID, err := runner.Start(ctx, cfg, run, kind, req.GetTask())
 	if err != nil {
 		_ = s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "start failed")
 		return nil, status.Errorf(codes.Unavailable, "starting the pigeon: %v", err)
@@ -316,7 +352,7 @@ func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunSt
 // end stops the pigeon, records ENDED, and says so on the thread.
 func (s *Server) end(ctx context.Context, run *pb.LiveRun, reason pb.EndReason, detail string) error {
 	if cfg := s.config(); cfg != nil {
-		if err := s.runner(cfg).Stop(ctx, run); err != nil {
+		if err := s.runner(cfg).Stop(ctx, cfg, run); err != nil {
 			zap.L().Warn("stopping pigeon", zap.String("run", run.GetRunId()), zap.Error(err))
 		}
 	}
@@ -353,6 +389,18 @@ func (s *Server) Tick(ctx context.Context) {
 		}
 		if now > run.GetDeadlineMs() {
 			if err := s.end(ctx, run, pb.EndReason_END_REASON_DEADLINE, "deadline"); err != nil {
+				zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
+			}
+			continue
+		}
+		// A pigeon that ended on its own: its Job failed, or completed.
+		ended, reason, detail, err := s.runner(cfg).Check(ctx, cfg, run)
+		if err != nil {
+			zap.L().Warn("tick: checking run", zap.String("run", run.GetRunId()), zap.Error(err))
+			continue
+		}
+		if ended {
+			if err := s.end(ctx, run, reason, detail); err != nil {
 				zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
 			}
 		}
@@ -513,10 +561,16 @@ func (s *Server) runner(cfg *pb.Config) Runner {
 // pigeon, so the pigeon's SPIFFE id is the coop's.
 type mockRunner struct{ self string }
 
-func (r mockRunner) Start(context.Context, *pb.LiveRun, *pb.Kind, []byte) (string, error) {
+func (r mockRunner) Start(context.Context, *pb.Config, *pb.LiveRun, *pb.Kind, []byte) (string, error) {
 	return r.self, nil
 }
-func (r mockRunner) Stop(context.Context, *pb.LiveRun) error { return nil }
+func (r mockRunner) Stop(context.Context, *pb.Config, *pb.LiveRun) error { return nil }
+func (r mockRunner) Check(context.Context, *pb.Config, *pb.LiveRun) (bool, pb.EndReason, string, error) {
+	return false, pb.EndReason_END_REASON_UNSPECIFIED, "", nil
+}
+func (r mockRunner) Reconcile(context.Context, *pb.Config, map[string]*pb.LiveRun) ([]*pb.LiveRun, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------- helpers
 

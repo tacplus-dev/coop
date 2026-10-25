@@ -15,6 +15,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
 	"github.com/tacplus-dev/coop/internal/coop"
 	loggerchassis "github.com/tacplus-dev/coop/tacplus/chassis/logger"
 	"github.com/tacplus-dev/coop/tacplus/chassis/token"
@@ -68,6 +71,7 @@ func run() error {
 		Runs:       runState{s.StateClients().Services().CoopState()},
 		Self:       own.GetSubject(),
 		Now:        time.Now,
+		Jobs:       jobRunner(s),
 	}
 	// The coop reads its own topic: it answers for pigeons that are gone and,
 	// in MOCK mode, it is the pigeon.
@@ -104,4 +108,29 @@ func (r runState) Put(ctx context.Context, run *pb.LiveRun) error {
 }
 func (r runState) All(ctx context.Context) (map[string]*pb.LiveRun, error) {
 	return r.c.FetchAllRuns(ctx)
+}
+
+// jobRunner is MODE_JOBS when this coop runs in a cluster with an API token
+// (the operator projects one for it); otherwise nil, and the mode is refused.
+func jobRunner(s *sm.ServiceManager) coop.Runner {
+	rc, err := rest.InClusterConfig()
+	if err != nil {
+		zap.L().Info("no in-cluster Kubernetes config; MODE_JOBS unavailable", zap.Error(err))
+		return nil
+	}
+	client, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		zap.L().Warn("kubernetes client; MODE_JOBS unavailable", zap.Error(err))
+		return nil
+	}
+	bootstrap, err := os.ReadFile(os.Getenv("BOOTSTRAP_CONFIG"))
+	if err != nil {
+		zap.L().Warn("reading BOOTSTRAP_CONFIG for pigeons; MODE_JOBS unavailable", zap.Error(err))
+		return nil
+	}
+	return &coop.JobRunner{
+		Client:    client,
+		Mint:      s.Grpc().Clients().Services().MintClient(),
+		Bootstrap: bootstrap,
+	}
 }

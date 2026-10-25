@@ -172,7 +172,7 @@ func TestCreatePigeonValidations(t *testing.T) {
 	cfg.Mode = pb.Mode_MODE_JOBS
 	hj := newHarness(t, cfg)
 	_, err = hj.s.CreatePigeon(ctx, dog, hj.request("echo.ping"))
-	wantCode(t, err, codes.FailedPrecondition, "MODE_JOBS is not built yet")
+	wantCode(t, err, codes.FailedPrecondition, "MODE_JOBS needs a Kubernetes client")
 
 	cfg = mockCfg()
 	cfg.Paused = true
