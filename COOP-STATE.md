@@ -50,7 +50,14 @@ Decisions made while building:
   events; `PigeonRun.end_reason` (non-final rows) and `MessageError.code`
   (informational end message) carry UNSPECIFIED legitimately, so neither is
   asserted.
-- **sender is self-reported, for now.** The wrapper stamps `(spec.principal)`
+- **sender → spiffe_id, stamped by eventbus (2026-10-25 ~02:30 MDT).**
+  eventbus already stamps the publisher's identity onto any topic type with
+  a `string spiffe_id` field (TopicDiscovery / IdentityStamper), which is
+  what A30 §3.4 specified; the field was named `sender` and so never
+  stamped. Renamed in place (field 10, `(spec.principal)` kept as the
+  declaration); the coop, the dog and the pigeon no longer stamp
+  themselves. Supersedes the note below. Proof pending the rebuild.
+- (superseded) **sender is self-reported, for now.** The wrapper stamps `(spec.principal)`
   on RPC requests from the caller's token, but nothing stamps it on a
   published event: the dog's message reached the coop with no sender and was
   dropped. The dog sets `sender` from its own token. Honest within a fleet
