@@ -92,6 +92,9 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatal("a pigeon must hold no Kubernetes identity")
 	}
+	if *pod.SecurityContext.FSGroup != 65532 || *pod.Volumes[0].Secret.DefaultMode != 0o440 {
+		t.Fatalf("the pigeon (uid 65532) must be able to read its Secret: fsGroup %v mode %o", pod.SecurityContext.FSGroup, *pod.Volumes[0].Secret.DefaultMode)
+	}
 	if !*c.SecurityContext.ReadOnlyRootFilesystem || *c.SecurityContext.AllowPrivilegeEscalation || !*pod.SecurityContext.RunAsNonRoot {
 		t.Fatalf("pigeon container is not locked down: %+v", c.SecurityContext)
 	}
