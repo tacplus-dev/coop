@@ -103,18 +103,6 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 	name := jobName(run)
 	labels := map[string]string{labelRun: run.GetRunId(), labelKind: run.GetKind()}
 	annotations := map[string]string{annotationTenant: run.GetTenantNamespace()}
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: annotations},
-		Type:       corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"bootstrap.token": []byte(bootstrap.GetBase64()),
-			"bootstrap.yaml":  r.Bootstrap,
-		},
-	}
-	if _, err := r.Client.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-		return "", fmt.Errorf("creating the run's secret: %w", err)
-	}
-
 	activeDeadline := int64(time.UnixMilli(run.GetDeadlineMs()).Sub(now)/time.Second) + int64(readyGrace/time.Second)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: annotations},
@@ -164,15 +152,26 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 	}
 	created, err := r.Client.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
-		_ = r.Client.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
 		return "", fmt.Errorf("creating the run's job: %w", err)
 	}
-	// The Secret follows its Job out: a deleted Job takes it along.
-	secret.OwnerReferences = []metav1.OwnerReference{{
-		APIVersion: "batch/v1", Kind: "Job", Name: created.Name, UID: created.UID, Controller: ptr.To(true),
-	}}
-	if _, err := r.Client.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
-		return "", fmt.Errorf("owning the run's secret: %w", err)
+	// The Job first, then its Secret born owned by it, so it follows the Job
+	// out and the coop never needs to update a Secret. The pod waits on the
+	// mount until the Secret exists, which is a moment later.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, Annotations: annotations,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1", Kind: "Job", Name: created.Name, UID: created.UID, Controller: ptr.To(true),
+			}}},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"bootstrap.token": []byte(bootstrap.GetBase64()),
+			"bootstrap.yaml":  r.Bootstrap,
+		},
+	}
+	if _, err := r.Client.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		policy := metav1.DeletePropagationForeground
+		_ = r.Client.BatchV1().Jobs(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
+		return "", fmt.Errorf("creating the run's secret: %w", err)
 	}
 	run.JobName = name
 	return pigeonID, nil
