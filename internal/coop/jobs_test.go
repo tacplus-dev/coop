@@ -30,7 +30,11 @@ type fakeMint struct {
 
 func (m *fakeMint) MintWorkload(_ context.Context, req *tokenrequest_pb.WorkloadMintRequest, _ ...grpc.CallOption) (*tokenrequest_pb.WorkloadMintResponse, error) {
 	m.minted = append(m.minted, req)
-	tok := token.NewImmutableToken(&token_pb.Token{Payload: map[string]string{}}).SetSubject(coopID + "/workloads/" + req.GetWorkloadName())
+	parent := req.GetParentSpiffeId()
+	if parent == "" {
+		parent = coopID
+	}
+	tok := token.NewImmutableToken(&token_pb.Token{Payload: map[string]string{}}).SetSubject(parent + "/workloads/" + req.GetWorkloadName())
 	tok.Proto().Base64 = "hdr.payload.sig" // kernel returns the signed, encoded token
 	return &tokenrequest_pb.WorkloadMintResponse{BootstrapToken: tok.Proto()}, nil
 }
@@ -62,11 +66,12 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != coopID+"/workloads/pigeon-01abc" || run.GetJobName() != "pigeon-01abc" {
+	// The pigeon is the dog's: minted under the caller, in the caller's tenant.
+	if id != dogAcme+"/workloads/pigeon-01abc" || run.GetJobName() != "pigeon-01abc" {
 		t.Fatalf("pigeon id %q job %q", id, run.GetJobName())
 	}
 	// The identity is terminal and lives no longer than the bootstrap cap.
-	if m := mint.minted[0]; !m.GetTerminal() || m.GetWorkloadName() != "pigeon-01abc" || m.GetExp() != 1_700_000_000+300 {
+	if m := mint.minted[0]; !m.GetTerminal() || m.GetWorkloadName() != "pigeon-01abc" || m.GetExp() != 1_700_000_000+300 || m.GetParentSpiffeId() != dogAcme {
 		t.Fatalf("mint request %v", m)
 	}
 	secret, err := client.CoreV1().Secrets("schematic-pigeons").Get(ctx, "pigeon-01abc", metav1.GetOptions{})

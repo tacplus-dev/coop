@@ -96,8 +96,11 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 	if deadline := time.UnixMilli(run.GetDeadlineMs()); deadline.Before(exp) {
 		exp = deadline
 	}
+	// The pigeon is minted under the dog that asked for it (the coop is the
+	// fleet's workload broker, kernel Delegate.workload_broker), so its
+	// identity is <dog>/workloads/pigeon-<run>, in the dog's tenant.
 	minted, err := r.Mint.MintWorkload(ctx, &tokenrequest_pb.WorkloadMintRequest{
-		WorkloadName: jobName(run), Terminal: true, Exp: exp.Unix(),
+		WorkloadName: jobName(run), Terminal: true, Exp: exp.Unix(), ParentSpiffeId: run.GetCallerSpiffeId(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("minting the pigeon's identity: %w", err)
