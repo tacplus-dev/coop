@@ -37,6 +37,26 @@ Decisions made while building:
   types package imported twice in the generated Go service manager
   (`coop_pb redeclared`). Fixed on registry-and-floor at 53a02dc
   (`markSubscriptionTypeImports`); fleet-seatrials pins that commit.
+- **tacplus fix 2: Go subscribers mint for the broker.** The generated Go
+  subscriber opened its stream on the eventbus connection whose audience
+  heuristic reads the method's package, so it minted a token for the topic
+  OWNER and eventbus refused it. The subscriber now takes a TokenSource and
+  the service manager hands it GetTokenFor(<broker>), as publishers and the
+  Rust/Java subscribers already did. registry-and-floor f65ffc2.
+- **Delegates.** kernel.yaml needs a `coop` delegate and `coop` in every
+  dog's `authorized_services`; the operator renders coop only when
+  `topology.app_services.coop` names it.
+- **UNSPECIFIED is a value.** The broker enforces `assert_enum_defined` on
+  events; `PigeonRun.end_reason` (non-final rows) and `MessageError.code`
+  (informational end message) carry UNSPECIFIED legitimately, so neither is
+  asserted.
+- **sender is self-reported, for now.** The wrapper stamps `(spec.principal)`
+  on RPC requests from the caller's token, but nothing stamps it on a
+  published event: the dog's message reached the coop with no sender and was
+  dropped. The dog sets `sender` from its own token. Honest within a fleet
+  (every publisher is a service with a verified publish token), but the real
+  fix is the broker stamping `(spec.principal)` from the publish token —
+  tacplus/eventbus follow-up.
 - **Idempotency is per caller.** Same caller + same `idempotency_key` returns
   the same run; another caller's key is another run.
 - **A ping's run ends with the ping.** tenantecho cancels the run when
