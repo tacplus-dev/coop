@@ -148,6 +148,17 @@ Learned from the first real pigeons on seatrials (2026-10-25, in order):
   worry was not the failure mode; whether kernel authorises an eventbus
   audience for the workload is the next thing the run will show.
 
+**MODE_JOBS proven on seatrials, 2026-10-25 00:5xZ** (fleet-seatrials with
+tacplus fcb665b, coop 49e12b1, pigeon 4ed1acd): `seatrials pingpigeon` as
+alpha and as beta each returned its own message echoed by a real pigeon
+(`pigeon_spiffe_id` = `/system/services/coop/workloads/pigeon-<run>`), the
+Job and its Secret gone within seconds of the dog's cancel; a coop restart
+in the middle of a run left the run alive (the new coop reconciled it and
+kept its Job) and the result still arrived; the pigeons namespace's default
+SA can only read API discovery, and the pod mounts no token at all. Not yet
+tested live: deadline expiry (needs a dog that does not cancel) and the
+ready-timeout path.
+
 Open, and the identity question put to Jody (2026-10-25):
 - **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
   the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
