@@ -123,13 +123,6 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptr.To(false),
-					// The chassis advertises os.Hostname() as the health endpoint
-					// and kernel requires an IP or an FQDN; a bare pod name is
-					// neither. Nobody routes to a pigeon, so the FQDN only has to
-					// be one: <job>.pigeons.<ns>.svc.cluster.local.
-					Hostname:          name,
-					Subdomain:         "pigeons",
-					SetHostnameAsFQDN: ptr.To(true),
 					DNSConfig:                    &corev1.PodDNSConfig{Searches: []string{r.FleetNamespace + ".svc.cluster.local"}},
 					SecurityContext: &corev1.PodSecurityContext{
 						// The Secret's files are root's; fsGroup makes them the pod's
@@ -156,6 +149,10 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 							{Name: "PIGEON_TENANT", Value: run.GetTenantNamespace()},
 							{Name: "PIGEON_KIND", Value: run.GetKind()},
 							{Name: "PIGEON_CALLER", Value: run.GetCallerSpiffeId()},
+							// The chassis advertises its health endpoint by hostname,
+							// which a Job's pod does not have as an address; the pod IP
+							// is what kernel accepts (SERVICE_ADVERTISE_HOST, tacplus).
+							{Name: "SERVICE_ADVERTISE_HOST", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "pigeon", MountPath: pigeonMount, ReadOnly: true},
