@@ -170,7 +170,21 @@ fleet marks the coop delegate `workload_broker: true`. Expected pigeon
 identity: `/tenants/<t>/services/tenantecho/workloads/pigeon-<run>`, in the
 dog's tenant. Proof pending the rebuild (kernel, coop, pigeon images).
 
-Open, and the identity question put to Jody (2026-10-25):
+**Option 1 proven, 2026-10-25 ~02:00 MDT:** both tenants' pingpigeon return
+`pigeon_spiffe_id = /tenants/<t>/services/tenantecho/workloads/pigeon-<run>`,
+kernel's log shows `WorkloadMint: parent=<dog>, child=<dog>/workloads/...`,
+and the echo still arrives; the pigeon's eventbus publish and subscribe work
+under the tenant identity with no delegate (so the "workload has no
+delegate" worry below did not bite: kernel's exchange path treats a
+delegate-less workload as a non-S2S subject and still issues its service
+tokens). One more hole closed on the way: the operator mapped delegate
+fields by hand and silently dropped `workload_broker` from kernel.yaml
+(operator 2ef9eac round-trips and renders it, with a test).
+
+The identity question (below, kept for the record) is therefore CLOSED as
+option 1.
+
+The identity question put to Jody (2026-10-25), now closed:
 - **Who is the pigeon's parent.** Kernel's MintWorkload roots the child under
   the CALLER, with no on-behalf-of, and there is no S2S exchange that gives
   the coop a token with sub = dog (Grants are user delegations). Options:
@@ -187,6 +201,10 @@ Open, and the identity question put to Jody (2026-10-25):
   To be confirmed on the fleet before coding.
 
 Next:
-- Slice 2: MODE_JOBS — client-go Job per pigeon, MintWorkload identity, the
+- Slice 2 remainder: a live deadline-expiry and ready-timeout test (needs a
+  dog that does not cancel), and the pigeon's locality token (kernel's
+  parent-locality check is optional today; the coop registers none).
+- Slice 3: pigeonproxy and the egress allow rule (A30 §3.7).
+- Slice 2 as designed: MODE_JOBS — client-go Job per pigeon, MintWorkload identity, the
   lease file (`lease_names` → FailedPrecondition until then), pigeons
   namespace RBAC. Then the generic pigeon host.
