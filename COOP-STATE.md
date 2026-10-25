@@ -227,6 +227,10 @@ github.com/tacplus-dev/pigeon). Note for tacplus: one proto package across
 two directories is not supported by the Rust generator; the Go generator
 accepted it silently.
 
+**pigeonhost proven, 2026-10-25 10:21Z:** both tenants pass on the renamed
+image; the gateway's Let's Encrypt cert came back at letsencrypt's 10:21Z
+renewal tick exactly as diagnosed below (no restart of letsencrypt).
+
 Also tonight, outside the coop but found through it:
 - letsencrypt ran its own loop and never served gRPC; the launcher killed it
   every 5 minutes. It runs under the ServiceManager now (letsencrypt
