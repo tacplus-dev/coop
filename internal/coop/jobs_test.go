@@ -85,6 +85,9 @@ func TestJobRunnerStartCreatesSecretAndJob(t *testing.T) {
 	}
 	pod := job.Spec.Template.Spec
 	c := pod.Containers[0]
+	if c.ImagePullPolicy != corev1.PullAlways {
+		t.Fatalf("a pigeon must pull its image every time: %v", c.ImagePullPolicy)
+	}
 	if c.Image != "example.test/pigeon:1" || *job.Spec.BackoffLimit != 0 || pod.RestartPolicy != corev1.RestartPolicyNever ||
 		*job.Spec.ActiveDeadlineSeconds != 600+30 || *job.Spec.TTLSecondsAfterFinished != 60 {
 		t.Fatalf("job spec %+v", job.Spec)

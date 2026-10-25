@@ -137,6 +137,10 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 					Containers: []corev1.Container{{
 						Name:  "pigeon",
 						Image: kind.GetImage(),
+						// The fleet references images by mutable tag (operator local
+						// mode, <registry>/schematic/<svc>:local) and pulls Always for
+						// its own pods; a pigeon must not run a stale cached one.
+						ImagePullPolicy: corev1.PullAlways,
 						Env: []corev1.EnvVar{
 							{Name: "KERNEL_BOOTSTRAP_TOKEN_FILE", Value: pigeonMount + "/bootstrap.token"},
 							{Name: "BOOTSTRAP_CONFIG", Value: pigeonMount + "/bootstrap.yaml"},
