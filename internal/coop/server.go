@@ -61,8 +61,8 @@ type Server struct {
 	// Jobs runs pigeons in MODE_JOBS; nil when the coop has no Kubernetes
 	// client, and the mode is then refused rather than pretended.
 	Jobs Runner
-	// Self is this coop's own SPIFFE id: the sender of FROM_COOP messages and,
-	// in MOCK mode, the mock pigeon's identity.
+	// Self is this coop's own SPIFFE id: in MOCK mode, the mock pigeon's
+	// identity. (The sender of a message is eventbus's to stamp.)
 	Self string
 	Now  func() time.Time
 
@@ -457,9 +457,9 @@ func (s *Server) OnMessage(ctx context.Context, m *pb.PigeonMessage, _ *eb_pb.Re
 	if run == nil {
 		return s.gone(ctx, m, "never_created")
 	}
-	if m.GetSender() != run.GetCallerSpiffeId() {
+	if m.GetSpiffeId() != run.GetCallerSpiffeId() {
 		zap.L().Warn("dropping message from a sender that is not the run's caller",
-			zap.String("run", run.GetRunId()), zap.String("sender", m.GetSender()))
+			zap.String("run", run.GetRunId()), zap.String("sender", m.GetSpiffeId()))
 		return nil
 	}
 	switch run.GetState() {
@@ -489,7 +489,7 @@ func goneDetail(reason pb.EndReason) string {
 func (s *Server) gone(ctx context.Context, m *pb.PigeonMessage, detail string) error {
 	return s.Publish(ctx, &pb.PigeonMessage{
 		RunId: m.GetRunId(), ThreadId: m.GetThreadId(), Direction: pb.Direction_DIRECTION_FROM_COOP, Kind: m.GetKind(),
-		Seq: s.nextSeq(m.GetRunId()), TenantNamespace: m.GetTenantNamespace(), SentMs: s.Now().UnixMilli(), Sender: s.Self,
+		Seq: s.nextSeq(m.GetRunId()), TenantNamespace: m.GetTenantNamespace(), SentMs: s.Now().UnixMilli(),
 		Error: &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE, Detail: detail},
 	})
 }
@@ -506,7 +506,7 @@ func (s *Server) say(ctx context.Context, run *pb.LiveRun, dir pb.Direction, bod
 	return s.Publish(ctx, &pb.PigeonMessage{
 		RunId: run.GetRunId(), ThreadId: run.GetThreadId(), Direction: dir, Kind: run.GetKind(),
 		Seq: s.nextSeq(run.GetRunId()), Body: raw, Error: e, TenantNamespace: run.GetTenantNamespace(),
-		SentMs: s.Now().UnixMilli(), Sender: s.Self,
+		SentMs: s.Now().UnixMilli(),
 	})
 }
 

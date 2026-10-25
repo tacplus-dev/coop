@@ -31,8 +31,8 @@ contents. A kind that needs the Texas 811 ticket flow, say, is a product's busin
   state. A run belongs to the caller that created it; any other caller gets `NotFound`.
 - `PigeonMessage` is the thread: an event on `coop.PigeonMessageBus.stream`, one thread per
   run, `TO_PIGEON` from the dog, `FROM_PIGEON` from the pigeon, `FROM_COOP` from the coop.
-  `sender` is set from the publisher's token, so the coop drops a `TO_PIGEON` message from
-  anyone but the run's caller, and answers `PIGEON_GONE` (`never_created`, `discarded`,
+  `spiffe_id` is stamped by eventbus from the publisher's token, so the coop drops a `TO_PIGEON`
+  message from anyone but the run's caller, and answers `PIGEON_GONE` (`never_created`, `discarded`,
   `expired`, `killed`, `failed`) for a run that is not live.
 - `PigeonRun` is the audit record, one row per state transition, stored by stratum.
 - `LiveRun` is the coop's working state, in kernel state (`CoopState.runs`), keyed by run id.

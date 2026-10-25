@@ -116,7 +116,7 @@ func (h *harness) request(kind string) *pb.PigeonRequest {
 func (h *harness) toPigeon(tk *pb.PigeonTicket, sender, taskKind string) *pb.PigeonMessage {
 	body, _ := proto.Marshal(&pigeon_pb.ToPigeon{Body: &pigeon_pb.ToPigeon_Task{Task: &pigeon_pb.PigeonTask{Kind: taskKind, JobId: "j1"}}})
 	return &pb.PigeonMessage{RunId: tk.GetRunId(), ThreadId: tk.GetThreadId(), Direction: pb.Direction_DIRECTION_TO_PIGEON,
-		Kind: "echo.ping", Seq: 1, Body: body, TenantNamespace: acme, Sender: sender}
+		Kind: "echo.ping", Seq: 1, Body: body, TenantNamespace: acme, SpiffeId: sender}
 }
 
 func wantCode(t *testing.T, err error, code codes.Code, contains string) {
@@ -250,7 +250,7 @@ func TestMockRoundTrip(t *testing.T) {
 		t.Fatalf("second message is not the mock result: %v %v", err, h.msgs[1])
 	}
 	for i, m := range h.msgs {
-		if m.GetDirection() != pb.Direction_DIRECTION_FROM_PIGEON || m.GetSender() != coopID || m.GetSeq() != int64(i+1) || m.GetTenantNamespace() != acme {
+		if m.GetDirection() != pb.Direction_DIRECTION_FROM_PIGEON || m.GetSpiffeId() != coopID || m.GetSeq() != int64(i+1) || m.GetTenantNamespace() != acme {
 			t.Fatalf("message %d: %v", i, m)
 		}
 	}
@@ -328,7 +328,7 @@ func TestOnMessageGoneAndForeignSender(t *testing.T) {
 	if err := h.s.OnMessage(ctx, m, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.msgs[0].GetError(); got.GetCode() != pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE || got.GetDetail() != "never_created" || h.msgs[0].GetSender() != coopID {
+	if got := h.msgs[0].GetError(); got.GetCode() != pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE || got.GetDetail() != "never_created" || h.msgs[0].GetSpiffeId() != coopID {
 		t.Fatalf("gone %v", h.msgs[0])
 	}
 
