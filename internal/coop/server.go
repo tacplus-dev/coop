@@ -359,6 +359,8 @@ func (s *Server) end(ctx context.Context, run *pb.LiveRun, reason pb.EndReason, 
 	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_ENDED, reason, nil); err != nil {
 		return err
 	}
+	zap.L().Info("run ended", zap.String("run", run.GetRunId()), zap.String("tenant", run.GetTenantNamespace()),
+		zap.String("kind", run.GetKind()), zap.String("reason", reason.String()), zap.String("detail", detail))
 	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_COOP, nil, &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_UNSPECIFIED, Detail: "ended: " + detail})
 }
 
