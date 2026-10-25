@@ -379,6 +379,16 @@ func (s *Server) Tick(ctx context.Context) {
 		switch run.GetState() {
 		case pb.RunState_RUN_STATE_ENDED:
 			continue
+		case pb.RunState_RUN_STATE_REQUESTED:
+			// CreatePigeon is between recording the run and starting its
+			// pigeon; there is no Job to check yet. One that stays here past
+			// the ready timeout was abandoned by a coop that died mid-start.
+			if cfg.GetReadyTimeoutMs() > 0 && now > run.GetCreatedMs()+cfg.GetReadyTimeoutMs() {
+				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "never started"); err != nil {
+					zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
+				}
+			}
+			continue
 		case pb.RunState_RUN_STATE_STARTING:
 			if cfg.GetReadyTimeoutMs() > 0 && now > run.GetCreatedMs()+cfg.GetReadyTimeoutMs() {
 				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "not ready in time"); err != nil {

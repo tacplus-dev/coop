@@ -401,6 +401,29 @@ func TestTickEndsLateAndUnreadyRuns(t *testing.T) {
 	}
 }
 
+// A run the coop has recorded but not yet started has no pigeon to check;
+// the tick leaves it alone until the ready timeout, then ends it FAILED.
+func TestTickLeavesARequestedRunAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, mockCfg())
+	run := &pb.LiveRun{RunId: "01req", TenantNamespace: acme, CallerSpiffeId: dogAcme, Kind: "echo.ping",
+		State: pb.RunState_RUN_STATE_REQUESTED, DeadlineMs: h.now.Add(10 * time.Minute).UnixMilli(), CreatedMs: h.now.UnixMilli()}
+	if err := h.runs.Put(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	h.s.Tick(ctx)
+	got, _ := h.runs.Fetch(ctx, "01req")
+	if got.GetState() != pb.RunState_RUN_STATE_REQUESTED {
+		t.Fatalf("tick touched a run still being started: %v", got)
+	}
+	h.now = h.now.Add(61 * time.Second)
+	h.s.Tick(ctx)
+	got, _ = h.runs.Fetch(ctx, "01req")
+	if got.GetState() != pb.RunState_RUN_STATE_ENDED || got.GetEndReason() != pb.EndReason_END_REASON_FAILED {
+		t.Fatalf("an abandoned REQUESTED run must end FAILED: %v", got)
+	}
+}
+
 func TestPauseKillsLiveRuns(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, mockCfg())
