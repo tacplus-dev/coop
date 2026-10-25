@@ -250,7 +250,8 @@ func TestMockRoundTrip(t *testing.T) {
 		t.Fatalf("second message is not the mock result: %v %v", err, h.msgs[1])
 	}
 	for i, m := range h.msgs {
-		if m.GetDirection() != pb.Direction_DIRECTION_FROM_PIGEON || m.GetSpiffeId() != coopID || m.GetSeq() != int64(i+1) || m.GetTenantNamespace() != acme {
+		// spiffe_id is eventbus's to stamp from the publish token, so the coop sends none.
+		if m.GetDirection() != pb.Direction_DIRECTION_FROM_PIGEON || m.GetSpiffeId() != "" || m.GetSeq() != int64(i+1) || m.GetTenantNamespace() != acme {
 			t.Fatalf("message %d: %v", i, m)
 		}
 	}
@@ -328,7 +329,7 @@ func TestOnMessageGoneAndForeignSender(t *testing.T) {
 	if err := h.s.OnMessage(ctx, m, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.msgs[0].GetError(); got.GetCode() != pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE || got.GetDetail() != "never_created" || h.msgs[0].GetSpiffeId() != coopID {
+	if got := h.msgs[0].GetError(); got.GetCode() != pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE || got.GetDetail() != "never_created" {
 		t.Fatalf("gone %v", h.msgs[0])
 	}
 
