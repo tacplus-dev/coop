@@ -1,6 +1,9 @@
 # The coop: the fleet's one door to pigeons — sandboxed, short-lived browser
 # workloads a tenant's service (a "dog") asks for by kind. Design:
 # schematic/looper/schematic/decisions/a30-a31-pigeons-design-2026-10-02.md.
+# The compiler line this repository builds with: the looper runs that line's
+# latest patch (tacplus-dev/tacplus#161).
+tacplus: "2.4"
 kind: service
 language: go
 src: proto
