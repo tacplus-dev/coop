@@ -3,7 +3,7 @@
 # schematic/looper/schematic/decisions/a30-a31-pigeons-design-2026-10-02.md.
 # The compiler line this repository builds with: the looper runs that line's
 # latest patch (tacplus-dev/tacplus#161).
-tacplus: "2.4"
+tacplus: "2.5"
 kind: service
 language: go
 src: proto
