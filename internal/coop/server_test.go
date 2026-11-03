@@ -5,6 +5,7 @@ package coop
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -461,4 +462,230 @@ func TestNewRunID(t *testing.T) {
 	if len(a) != 26 || a == b || strings.ToLower(a) != a {
 		t.Fatalf("run ids: %q %q", a, b)
 	}
+}
+
+// ---------------------------------------------------------------- trace_id
+
+// traceRunner is a Runner that remembers the trace_id each Stop carried; it
+// can fail Start, and Reconcile returns missing.
+type traceRunner struct {
+	mockRunner
+	failStart bool
+	missing   []*pb.LiveRun
+	stops     []string
+}
+
+func (r *traceRunner) Start(context.Context, *pb.Config, *pb.LiveRun, *pb.Kind, []byte) (string, error) {
+	if r.failStart {
+		return "", errors.New("no pigeon today")
+	}
+	return r.self, nil
+}
+func (r *traceRunner) Stop(_ context.Context, _ *pb.Config, _ *pb.LiveRun, trace string) error {
+	r.stops = append(r.stops, trace)
+	return nil
+}
+func (r *traceRunner) Reconcile(context.Context, *pb.Config, map[string]*pb.LiveRun) ([]*pb.LiveRun, error) {
+	return r.missing, nil
+}
+
+// jobsHarness is a harness in MODE_JOBS over a traceRunner.
+func jobsHarness(t *testing.T, r *traceRunner, cfg *pb.Config) *harness {
+	t.Helper()
+	h := &harness{runs: &fakeRuns{}, now: time.Unix(1_700_000_000, 0)}
+	r.self = coopID
+	h.s = &Server{
+		Publish:    func(_ context.Context, m *pb.PigeonMessage) error { h.msgs = append(h.msgs, m); return nil },
+		PublishRun: func(_ context.Context, rec *pb.PigeonRun) error { h.records = append(h.records, rec); return nil },
+		Runs:       h.runs,
+		Jobs:       r,
+		Self:       coopID,
+		Now:        func() time.Time { return h.now },
+	}
+	cfg.Mode = pb.Mode_MODE_JOBS
+	if err := h.s.CoopConfig(cfg); err != nil {
+		t.Fatalf("CoopConfig: %v", err)
+	}
+	return h
+}
+
+// wantTrace: wantMsgs messages and wantRecs records were published since
+// msgs[m] and records[r], and every one of them carries trace.
+func (h *harness) wantTrace(t *testing.T, trace string, m, r, wantMsgs, wantRecs int) {
+	t.Helper()
+	if got := len(h.msgs) - m; got != wantMsgs {
+		t.Fatalf("want %d messages, got %d: %v", wantMsgs, got, h.msgs[m:])
+	}
+	if got := len(h.records) - r; got != wantRecs {
+		t.Fatalf("want %d records, got %d: %v", wantRecs, got, h.records[r:])
+	}
+	for _, msg := range h.msgs[m:] {
+		if msg.GetTraceId() != trace {
+			t.Fatalf("message carries trace_id %q, want %q: %v", msg.GetTraceId(), trace, msg)
+		}
+	}
+	for _, rec := range h.records[r:] {
+		if rec.GetTraceId() != trace {
+			t.Fatalf("record carries trace_id %q, want %q: %v", rec.GetTraceId(), trace, rec)
+		}
+	}
+}
+
+func wantStops(t *testing.T, r *traceRunner, want ...string) {
+	t.Helper()
+	if strings.Join(r.stops, ",") != strings.Join(want, ",") {
+		t.Fatalf("Stop carried trace_ids %q, want %q", r.stops, want)
+	}
+}
+
+func TestCreatePigeonCarriesTraceID(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, mockCfg())
+	r := h.request("echo.ping")
+	r.TraceId = "trace-create"
+	if _, err := h.s.CreatePigeon(ctx, as(dogAcme, acme), r); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-create", 0, 0, 0, 2) // REQUESTED, STARTING
+	// The live run is stored, and a stored type never keeps a trace.
+	for _, run := range h.runs.runs {
+		if run.GetTraceId() != "" {
+			t.Fatalf("stored live run keeps trace_id %q", run.GetTraceId())
+		}
+	}
+
+	// A start that fails ends the run: the stop, the ENDED record and the
+	// FROM_COOP message carry the request's trace too.
+	runner := &traceRunner{failStart: true}
+	hj := jobsHarness(t, runner, mockCfg())
+	if _, err := hj.s.CreatePigeon(ctx, as(dogAcme, acme), r); err == nil {
+		t.Fatal("want the start to fail")
+	}
+	hj.wantTrace(t, "trace-create", 0, 0, 1, 2) // REQUESTED, ENDED; "ended: start failed"
+	wantStops(t, runner, "trace-create")
+}
+
+func TestCancelPigeonCarriesTraceID(t *testing.T) {
+	ctx := context.Background()
+	runner := &traceRunner{}
+	h := jobsHarness(t, runner, mockCfg())
+	dog := as(dogAcme, acme)
+	tk, err := h.s.CreatePigeon(ctx, dog, &pb.PigeonRequest{Kind: "echo.ping", DeadlineMs: h.now.Add(time.Minute).UnixMilli(), TraceId: "trace-create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, rec := len(h.msgs), len(h.records)
+	if _, err := h.s.CancelPigeon(ctx, dog, &pb.CancelPigeonRequest{RunId: tk.GetRunId(), TraceId: "trace-cancel"}); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-cancel", m, rec, 1, 1) // ENDED; "ended: done"
+	wantStops(t, runner, "trace-cancel")
+}
+
+func TestOnMessageCarriesTraceID(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, mockCfg())
+	dog := as(dogAcme, acme)
+	tk, err := h.s.CreatePigeon(ctx, dog, h.request("echo.ping"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The mock pigeon: Ready, the RUNNING record and the Result.
+	m, rec := len(h.msgs), len(h.records)
+	task := h.toPigeon(tk, dogAcme, "echo.ping")
+	task.TraceId = "trace-task"
+	if err := h.s.OnMessage(ctx, task, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-task", m, rec, 2, 1)
+
+	// No such run: PIGEON_GONE never_created.
+	m, rec = len(h.msgs), len(h.records)
+	nope := h.toPigeon(&pb.PigeonTicket{RunId: "nope", ThreadId: "nope"}, dogAcme, "echo.ping")
+	nope.TraceId = "trace-nope"
+	if err := h.s.OnMessage(ctx, nope, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-nope", m, rec, 1, 0)
+
+	// An ended run: PIGEON_GONE with its reason.
+	if _, err := h.s.CancelPigeon(ctx, dog, &pb.CancelPigeonRequest{RunId: tk.GetRunId()}); err != nil {
+		t.Fatal(err)
+	}
+	m, rec = len(h.msgs), len(h.records)
+	late := h.toPigeon(tk, dogAcme, "echo.ping")
+	late.TraceId = "trace-late"
+	if err := h.s.OnMessage(ctx, late, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-late", m, rec, 1, 0)
+
+	// A kind gone from the config under a live run: PIGEON_GONE failed.
+	tk, err = h.s.CreatePigeon(ctx, dog, h.request("echo.ping"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mockCfg()
+	cfg.Kinds = nil
+	if err := h.s.CoopConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	m, rec = len(h.msgs), len(h.records)
+	orphan := h.toPigeon(tk, dogAcme, "echo.ping")
+	orphan.TraceId = "trace-orphan"
+	if err := h.s.OnMessage(ctx, orphan, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-orphan", m, rec, 1, 0)
+}
+
+func TestCoopConfigCarriesTraceID(t *testing.T) {
+	ctx := context.Background()
+
+	// The first config in MODE_JOBS reconciles: a live run with no pigeon
+	// ends FAILED under the config's trace.
+	lost := &pb.LiveRun{RunId: "01lost", ThreadId: "01lost", TenantNamespace: acme, CallerSpiffeId: dogAcme, Kind: "echo.ping",
+		State: pb.RunState_RUN_STATE_RUNNING, DeadlineMs: time.Unix(1_700_000_000, 0).Add(time.Minute).UnixMilli()}
+	runner := &traceRunner{missing: []*pb.LiveRun{lost}}
+	cfg := mockCfg()
+	cfg.TraceId = "trace-config"
+	h := jobsHarness(t, runner, cfg)
+	h.wantTrace(t, "trace-config", 0, 0, 1, 1)
+	wantStops(t, runner, "trace-config")
+
+	// A pause ends the tenant's live runs under the trace of the config that paused it.
+	runner.missing = nil
+	if _, err := h.s.CreatePigeon(ctx, as(dogAcme, acme), h.request("echo.ping")); err != nil {
+		t.Fatal(err)
+	}
+	m, rec := len(h.msgs), len(h.records)
+	runner.stops = nil
+	cfg = mockCfg()
+	cfg.Mode = pb.Mode_MODE_JOBS
+	cfg.PausedTenants = []string{acme}
+	cfg.TraceId = "trace-pause"
+	if err := h.s.CoopConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	h.wantTrace(t, "trace-pause", m, rec, 1, 1)
+	wantStops(t, runner, "trace-pause")
+}
+
+// Tick is not a request: what it ends carries no trace, not even that of the
+// request that created the run.
+func TestTickCarriesNoTraceID(t *testing.T) {
+	ctx := context.Background()
+	runner := &traceRunner{}
+	h := jobsHarness(t, runner, mockCfg())
+	r := h.request("echo.ping")
+	r.TraceId = "trace-create"
+	if _, err := h.s.CreatePigeon(ctx, as(dogAcme, acme), r); err != nil {
+		t.Fatal(err)
+	}
+	m, rec := len(h.msgs), len(h.records)
+	h.now = h.now.Add(61 * time.Second)
+	h.s.Tick(ctx)
+	h.wantTrace(t, "", m, rec, 1, 1)
+	wantStops(t, runner, "")
 }

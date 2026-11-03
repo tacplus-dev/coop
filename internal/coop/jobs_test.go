@@ -26,6 +26,8 @@ import (
 type fakeMint struct {
 	minted  []*tokenrequest_pb.WorkloadMintRequest
 	revoked []string
+	// revokeTraces is the trace_id each revoke carried.
+	revokeTraces []string
 }
 
 func (m *fakeMint) MintWorkload(_ context.Context, req *tokenrequest_pb.WorkloadMintRequest, _ ...grpc.CallOption) (*tokenrequest_pb.WorkloadMintResponse, error) {
@@ -40,6 +42,7 @@ func (m *fakeMint) MintWorkload(_ context.Context, req *tokenrequest_pb.Workload
 }
 func (m *fakeMint) RevokeWorkload(_ context.Context, req *kernel_pb.WorkloadRevokeRequest, _ ...grpc.CallOption) error {
 	m.revoked = append(m.revoked, req.GetSpiffeId())
+	m.revokeTraces = append(m.revokeTraces, req.GetTraceId())
 	return nil
 }
 
@@ -179,8 +182,9 @@ func TestJobRunnerStopCheckReconcile(t *testing.T) {
 		t.Fatalf("failed job: %v %v %q %v", ended, reason, detail, err)
 	}
 
-	// Stop deletes the Job and Secret and revokes the identity.
-	if err := r.Stop(ctx, cfg, run); err != nil {
+	// Stop deletes the Job and Secret and revokes the identity, under the
+	// trace of what stopped it.
+	if err := r.Stop(ctx, cfg, run, "trace-stop"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.BatchV1().Jobs(cfg.PigeonsNamespace).Get(ctx, "pigeon-01abc", metav1.GetOptions{}); err == nil {
@@ -189,11 +193,11 @@ func TestJobRunnerStopCheckReconcile(t *testing.T) {
 	if _, err := client.CoreV1().Secrets(cfg.PigeonsNamespace).Get(ctx, "pigeon-01abc", metav1.GetOptions{}); err == nil {
 		t.Fatal("secret survived Stop")
 	}
-	if len(mint.revoked) != 1 || mint.revoked[0] != id {
-		t.Fatalf("revoked %v", mint.revoked)
+	if len(mint.revoked) != 1 || mint.revoked[0] != id || mint.revokeTraces[0] != "trace-stop" {
+		t.Fatalf("revoked %v, trace_ids %q", mint.revoked, mint.revokeTraces)
 	}
 	// Stopping again is a no-op, and a gone Job reads as ended.
-	if err := r.Stop(ctx, cfg, run); err != nil {
+	if err := r.Stop(ctx, cfg, run, ""); err != nil {
 		t.Fatalf("second stop: %v", err)
 	}
 	if ended, reason, _, _ := r.Check(ctx, cfg, run); !ended || reason != pb.EndReason_END_REASON_FAILED {

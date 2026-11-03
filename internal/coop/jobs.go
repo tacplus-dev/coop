@@ -99,6 +99,8 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 	// The pigeon is minted under the dog that asked for it (the coop is the
 	// fleet's workload broker, kernel Delegate.workload_broker), so its
 	// identity is <dog>/workloads/pigeon-<run>, in the dog's tenant.
+	// WorkloadMintRequest has no trace_id to carry the request's yet
+	// (tacplus-dev/tacplus#313).
 	minted, err := r.Mint.MintWorkload(ctx, &tokenrequest_pb.WorkloadMintRequest{
 		WorkloadName: jobName(run), Terminal: true, Exp: exp.Unix(), ParentSpiffeId: run.GetCallerSpiffeId(),
 	})
@@ -172,6 +174,7 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 			},
 		},
 	}
+	// trace: unrelated: the Kubernetes API carries no trace_id.
 	created, err := r.Client.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return "", fmt.Errorf("creating the run's job: %w", err)
@@ -190,8 +193,10 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 			"bootstrap.yaml":  r.Bootstrap,
 		},
 	}
+	// trace: unrelated: the Kubernetes API carries no trace_id.
 	if _, err := r.Client.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
 		policy := metav1.DeletePropagationForeground
+		// trace: unrelated: the Kubernetes API carries no trace_id.
 		_ = r.Client.BatchV1().Jobs(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
 		return "", fmt.Errorf("creating the run's secret: %w", err)
 	}
@@ -200,19 +205,21 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 }
 
 // Stop deletes the run's Job (foreground, so its pod and Secret go with it)
-// and revokes the pigeon's identity where kernel lets this coop.
-func (r *JobRunner) Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) error {
+// and revokes the pigeon's identity where kernel lets this coop, under trace.
+func (r *JobRunner) Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, trace string) error {
 	ns := cfg.GetPigeonsNamespace()
 	name := jobName(run)
 	policy := metav1.DeletePropagationForeground
+	// trace: unrelated: the Kubernetes API carries no trace_id.
 	if err := r.Client.BatchV1().Jobs(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("deleting job %s: %w", name, err)
 	}
+	// trace: unrelated: the Kubernetes API carries no trace_id.
 	if err := r.Client.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("deleting secret %s: %w", name, err)
 	}
 	if id := run.GetPigeonSpiffeId(); id != "" {
-		if err := r.Mint.RevokeWorkload(ctx, &kernel_pb.WorkloadRevokeRequest{SpiffeId: id}); err != nil {
+		if err := r.Mint.RevokeWorkload(ctx, &kernel_pb.WorkloadRevokeRequest{SpiffeId: id, TraceId: trace}); err != nil {
 			// Not fatal: the pod is gone and the token's TTL bounds the rest.
 			return fmt.Errorf("revoking %s (pod deleted; token expires at its ttl): %w", id, err)
 		}

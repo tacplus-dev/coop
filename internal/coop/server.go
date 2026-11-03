@@ -31,7 +31,8 @@ import (
 )
 
 // RunState is the live runs, in kernel state; the generated StateClient
-// satisfies it through runStateClient in main.
+// satisfies it through runStateClient in main. Its calls carry no trace_id:
+// the generated StateClient helpers take none (tacplus-dev/tacplus#313).
 type RunState interface {
 	Fetch(ctx context.Context, runID string) (*pb.LiveRun, error)
 	Put(ctx context.Context, run *pb.LiveRun) error
@@ -41,12 +42,13 @@ type RunState interface {
 // Runner starts and stops the thing that is a pigeon: a Kubernetes Job with
 // a minted identity (JobRunner), or nothing at all in MOCK mode. Start returns
 // the pigeon's SPIFFE id, which the dog expects FROM_PIGEON messages from.
+// Stop carries the trace_id of what stopped the pigeon, "" when nothing did.
 // Check says whether the pigeon ended on its own, and how; Reconcile, at the
 // coop's start, drops what has no live run and returns the live runs that
 // have no pigeon.
 type Runner interface {
 	Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, kind *pb.Kind, task []byte) (pigeonSpiffeID string, err error)
-	Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) error
+	Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, trace string) error
 	Check(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) (ended bool, reason pb.EndReason, detail string, err error)
 	Reconcile(ctx context.Context, cfg *pb.Config, live map[string]*pb.LiveRun) (missing []*pb.LiveRun, err error)
 }
@@ -80,7 +82,7 @@ func (s *Server) CoopGrpcImpl() fe.CoopHandler { return s }
 
 // CoopConfig is the generated config delivery, at start and on change. A
 // pause takes effect here: every live run of a paused tenant (or all, when
-// the coop is paused) ends KILLED.
+// the coop is paused) ends KILLED, under the config's trace_id.
 func (s *Server) CoopConfig(cfg *pb.Config) error {
 	if s.Now == nil {
 		s.Now = time.Now
@@ -93,15 +95,15 @@ func (s *Server) CoopConfig(cfg *pb.Config) error {
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := s.reconcile(ctx, cfg); err != nil {
+	if err := s.reconcile(ctx, cfg, cfg.GetTraceId()); err != nil {
 		return err
 	}
-	return s.applyPauses(ctx, cfg)
+	return s.applyPauses(ctx, cfg, cfg.GetTraceId())
 }
 
 // reconcile, once, on the first config: the runner drops what has no live
 // run, and every live run with no pigeon ends FAILED (A30 §3.3, coop restart).
-func (s *Server) reconcile(ctx context.Context, cfg *pb.Config) error {
+func (s *Server) reconcile(ctx context.Context, cfg *pb.Config, trace string) error {
 	s.mu.Lock()
 	done := s.reconciled
 	s.reconciled = true
@@ -113,12 +115,13 @@ func (s *Server) reconcile(ctx context.Context, cfg *pb.Config) error {
 	if err != nil {
 		return fmt.Errorf("reading live runs: %w", err)
 	}
+	// trace: unrelated: the Kubernetes API carries no trace_id.
 	missing, err := s.Jobs.Reconcile(ctx, cfg, all)
 	if err != nil {
 		return err
 	}
 	for _, run := range missing {
-		if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "no pigeon after coop restart"); err != nil {
+		if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "no pigeon after coop restart", trace); err != nil {
 			return err
 		}
 	}
@@ -247,18 +250,18 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 		AllowedDomains: req.GetAllowedDomains(),
 		BudgetMicros:   req.GetBudgetMicros(),
 		LeaseNames:     req.GetLeaseNames(),
-	}); err != nil {
+	}, req.GetTraceId()); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "recording the run: %v", err)
 	}
 
 	runner := s.runner(cfg)
 	pigeonID, err := runner.Start(ctx, cfg, run, kind, req.GetTask())
 	if err != nil {
-		_ = s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "start failed")
+		_ = s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "start failed", req.GetTraceId())
 		return nil, status.Errorf(codes.Unavailable, "starting the pigeon: %v", err)
 	}
 	run.PigeonSpiffeId = pigeonID
-	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_STARTING, pb.EndReason_END_REASON_UNSPECIFIED, nil); err != nil {
+	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_STARTING, pb.EndReason_END_REASON_UNSPECIFIED, nil, req.GetTraceId()); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "recording the run: %v", err)
 	}
 	return ticket(run), nil
@@ -280,7 +283,7 @@ func (s *Server) CancelPigeon(ctx context.Context, caller *servicemanager.Caller
 	if req.GetReason() == pb.DiscardReason_DISCARD_REASON_KILL {
 		reason = pb.EndReason_END_REASON_KILLED
 	}
-	if err := s.end(ctx, run, reason, strings.ToLower(strings.TrimPrefix(reason.String(), "END_REASON_"))); err != nil {
+	if err := s.end(ctx, run, reason, strings.ToLower(strings.TrimPrefix(reason.String(), "END_REASON_")), req.GetTraceId()); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "ending the run: %v", err)
 	}
 	return &pb.CancelPigeonResponse{}, nil
@@ -317,8 +320,9 @@ func (s *Server) ownRun(ctx context.Context, caller *servicemanager.Caller, runI
 // ---------------------------------------------------------------- lifecycle
 
 // transition moves a run to state, writes it, and puts the transition on the
-// record; extra carries the request-time fields the first record keeps.
-func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunState, reason pb.EndReason, extra *pb.PigeonRun) error {
+// record; extra carries the request-time fields the first record keeps, and
+// trace the trace_id of what caused the transition.
+func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunState, reason pb.EndReason, extra *pb.PigeonRun, trace string) error {
 	run.State = state
 	run.EndReason = reason
 	run.Seq++
@@ -339,6 +343,7 @@ func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunSt
 		JobName:         run.GetJobName(),
 		Seq:             run.GetSeq(),
 		TsMs:            s.Now().UnixMilli(),
+		TraceId:         trace,
 	}
 	if extra != nil {
 		rec.TaskDigest, rec.AllowedDomains, rec.BudgetMicros, rec.LeaseNames = extra.TaskDigest, extra.AllowedDomains, extra.BudgetMicros, extra.LeaseNames
@@ -349,28 +354,31 @@ func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunSt
 	return nil
 }
 
-// end stops the pigeon, records ENDED, and says so on the thread.
-func (s *Server) end(ctx context.Context, run *pb.LiveRun, reason pb.EndReason, detail string) error {
+// end stops the pigeon, records ENDED, and says so on the thread, all under
+// trace.
+func (s *Server) end(ctx context.Context, run *pb.LiveRun, reason pb.EndReason, detail, trace string) error {
 	if cfg := s.config(); cfg != nil {
-		if err := s.runner(cfg).Stop(ctx, cfg, run); err != nil {
+		if err := s.runner(cfg).Stop(ctx, cfg, run, trace); err != nil {
 			zap.L().Warn("stopping pigeon", zap.String("run", run.GetRunId()), zap.Error(err))
 		}
 	}
-	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_ENDED, reason, nil); err != nil {
+	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_ENDED, reason, nil, trace); err != nil {
 		return err
 	}
 	zap.L().Info("run ended", zap.String("run", run.GetRunId()), zap.String("tenant", run.GetTenantNamespace()),
 		zap.String("kind", run.GetKind()), zap.String("reason", reason.String()), zap.String("detail", detail))
-	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_COOP, nil, &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_UNSPECIFIED, Detail: "ended: " + detail})
+	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_COOP, nil, &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_UNSPECIFIED, Detail: "ended: " + detail}, trace)
 }
 
 // Tick ends every run past its deadline, and every STARTING run the pigeon
 // has not reported Ready on within ready_timeout_ms. Called periodically.
+// No request causes what it does, so it carries no trace_id.
 func (s *Server) Tick(ctx context.Context) {
 	cfg := s.config()
 	if cfg == nil {
 		return
 	}
+	// trace: unrelated: the periodic tick, caused by no request.
 	all, err := s.Runs.All(ctx)
 	if err != nil {
 		zap.L().Warn("tick: reading live runs", zap.Error(err))
@@ -386,40 +394,45 @@ func (s *Server) Tick(ctx context.Context) {
 			// pigeon; there is no Job to check yet. One that stays here past
 			// the ready timeout was abandoned by a coop that died mid-start.
 			if cfg.GetReadyTimeoutMs() > 0 && now > run.GetCreatedMs()+cfg.GetReadyTimeoutMs() {
-				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "never started"); err != nil {
+				// trace: unrelated: the periodic tick, caused by no request.
+				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "never started", ""); err != nil {
 					zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
 				}
 			}
 			continue
 		case pb.RunState_RUN_STATE_STARTING:
 			if cfg.GetReadyTimeoutMs() > 0 && now > run.GetCreatedMs()+cfg.GetReadyTimeoutMs() {
-				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "not ready in time"); err != nil {
+				// trace: unrelated: the periodic tick, caused by no request.
+				if err := s.end(ctx, run, pb.EndReason_END_REASON_FAILED, "not ready in time", ""); err != nil {
 					zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
 				}
 				continue
 			}
 		}
 		if now > run.GetDeadlineMs() {
-			if err := s.end(ctx, run, pb.EndReason_END_REASON_DEADLINE, "deadline"); err != nil {
+			// trace: unrelated: the periodic tick, caused by no request.
+			if err := s.end(ctx, run, pb.EndReason_END_REASON_DEADLINE, "deadline", ""); err != nil {
 				zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
 			}
 			continue
 		}
 		// A pigeon that ended on its own: its Job failed, or completed.
+		// trace: unrelated: the periodic tick, caused by no request.
 		ended, reason, detail, err := s.runner(cfg).Check(ctx, cfg, run)
 		if err != nil {
 			zap.L().Warn("tick: checking run", zap.String("run", run.GetRunId()), zap.Error(err))
 			continue
 		}
 		if ended {
-			if err := s.end(ctx, run, reason, detail); err != nil {
+			// trace: unrelated: the periodic tick, caused by no request.
+			if err := s.end(ctx, run, reason, detail, ""); err != nil {
 				zap.L().Warn("tick: ending run", zap.String("run", run.GetRunId()), zap.Error(err))
 			}
 		}
 	}
 }
 
-func (s *Server) applyPauses(ctx context.Context, cfg *pb.Config) error {
+func (s *Server) applyPauses(ctx context.Context, cfg *pb.Config, trace string) error {
 	if !cfg.GetPaused() && len(cfg.GetPausedTenants()) == 0 {
 		return nil
 	}
@@ -436,7 +449,7 @@ func (s *Server) applyPauses(ctx context.Context, cfg *pb.Config) error {
 			continue
 		}
 		if cfg.GetPaused() || paused[run.GetTenantNamespace()] {
-			if err := s.end(ctx, run, pb.EndReason_END_REASON_KILLED, "paused"); err != nil {
+			if err := s.end(ctx, run, pb.EndReason_END_REASON_KILLED, "paused", trace); err != nil {
 				return err
 			}
 		}
@@ -447,7 +460,8 @@ func (s *Server) applyPauses(ctx context.Context, cfg *pb.Config) error {
 // ---------------------------------------------------------------- the topic
 
 // OnMessage is the coop's subscription to its own topic: it answers for
-// pigeons that are gone, and in MOCK mode it is the pigeon.
+// pigeons that are gone, and in MOCK mode it is the pigeon. What it says
+// carries the message's trace_id.
 func (s *Server) OnMessage(ctx context.Context, m *pb.PigeonMessage, _ *eb_pb.RecordMeta) error {
 	if m.GetDirection() != pb.Direction_DIRECTION_TO_PIGEON {
 		return nil // never answer FROM_* messages, so it cannot loop
@@ -492,12 +506,14 @@ func (s *Server) gone(ctx context.Context, m *pb.PigeonMessage, detail string) e
 	return s.Publish(ctx, &pb.PigeonMessage{
 		RunId: m.GetRunId(), ThreadId: m.GetThreadId(), Direction: pb.Direction_DIRECTION_FROM_COOP, Kind: m.GetKind(),
 		Seq: s.nextSeq(m.GetRunId()), TenantNamespace: m.GetTenantNamespace(), SentMs: s.Now().UnixMilli(),
-		Error: &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE, Detail: detail},
+		Error:   &pb.MessageError{Code: pb.MessageErrorCode_MESSAGE_ERROR_CODE_PIGEON_GONE, Detail: detail},
+		TraceId: m.GetTraceId(),
 	})
 }
 
-// say publishes on a run's thread as the coop (or, in MOCK mode, as the pigeon).
-func (s *Server) say(ctx context.Context, run *pb.LiveRun, dir pb.Direction, body proto.Message, e *pb.MessageError) error {
+// say publishes on a run's thread as the coop (or, in MOCK mode, as the
+// pigeon), under trace.
+func (s *Server) say(ctx context.Context, run *pb.LiveRun, dir pb.Direction, body proto.Message, e *pb.MessageError, trace string) error {
 	var raw []byte
 	if body != nil {
 		var err error
@@ -508,7 +524,7 @@ func (s *Server) say(ctx context.Context, run *pb.LiveRun, dir pb.Direction, bod
 	return s.Publish(ctx, &pb.PigeonMessage{
 		RunId: run.GetRunId(), ThreadId: run.GetThreadId(), Direction: dir, Kind: run.GetKind(),
 		Seq: s.nextSeq(run.GetRunId()), Body: raw, Error: e, TenantNamespace: run.GetTenantNamespace(),
-		SentMs: s.Now().UnixMilli(),
+		SentMs: s.Now().UnixMilli(), TraceId: trace,
 	})
 }
 
@@ -536,10 +552,10 @@ func (s *Server) mockPigeon(ctx context.Context, run *pb.LiveRun, m *pb.PigeonMe
 		return nil
 	}
 	if run.GetState() == pb.RunState_RUN_STATE_STARTING {
-		if err := s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Ready{Ready: &pigeon_pb.Ready{}}}, nil); err != nil {
+		if err := s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, &pigeon_pb.FromPigeon{Body: &pigeon_pb.FromPigeon_Ready{Ready: &pigeon_pb.Ready{}}}, nil, m.GetTraceId()); err != nil {
 			return err
 		}
-		if err := s.transition(ctx, run, pb.RunState_RUN_STATE_RUNNING, pb.EndReason_END_REASON_UNSPECIFIED, nil); err != nil {
+		if err := s.transition(ctx, run, pb.RunState_RUN_STATE_RUNNING, pb.EndReason_END_REASON_UNSPECIFIED, nil, m.GetTraceId()); err != nil {
 			return err
 		}
 	}
@@ -557,7 +573,7 @@ func (s *Server) mockPigeon(ctx context.Context, run *pb.LiveRun, m *pb.PigeonMe
 			Failure: &pigeon_pb.Failure{Code: pigeon_pb.FailureCode_FAILURE_CODE_INVALID_TASK, Detail: "task names kind " + to.GetTask().GetKind()},
 		}}}
 	}
-	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, from, nil)
+	return s.say(ctx, run, pb.Direction_DIRECTION_FROM_PIGEON, from, nil, m.GetTraceId())
 }
 
 // ---------------------------------------------------------------- runners
@@ -576,7 +592,7 @@ type mockRunner struct{ self string }
 func (r mockRunner) Start(context.Context, *pb.Config, *pb.LiveRun, *pb.Kind, []byte) (string, error) {
 	return r.self, nil
 }
-func (r mockRunner) Stop(context.Context, *pb.Config, *pb.LiveRun) error { return nil }
+func (r mockRunner) Stop(context.Context, *pb.Config, *pb.LiveRun, string) error { return nil }
 func (r mockRunner) Check(context.Context, *pb.Config, *pb.LiveRun) (bool, pb.EndReason, string, error) {
 	return false, pb.EndReason_END_REASON_UNSPECIFIED, "", nil
 }
