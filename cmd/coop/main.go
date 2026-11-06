@@ -3,7 +3,8 @@
 
 // coop is the fleet's one door to pigeons: tenant services ask it for a
 // pigeon, talk to the pigeon on a thread of the PigeonMessage topic, and the
-// coop keeps the run's lifecycle in kernel state and on the PigeonRun record.
+// coop keeps the run's lifecycle in kernel state and on the PigeonRun record,
+// in the run's tenant's stratum.
 package main
 
 import (
@@ -67,12 +68,14 @@ func run() error {
 	}
 
 	server := &coop.Server{
-		Publish:    s.CreateCoopPigeonMessageBusStreamPublisher(),
-		PublishRun: s.CreateCoopPigeonRunBusStreamPublisher(),
-		Runs:       runState{s.StateClients().Services().CoopState()},
-		Self:       own.GetSubject(),
-		Now:        time.Now,
-		Jobs:       jobRunner(s),
+		Publish: s.CreateCoopPigeonMessageBusStreamPublisher(),
+		// PigeonRun rows go to the run's tenant's stratum through its record
+		// write surface, never onto the bus (#5).
+		Records: s.Grpc().Clients().Vservices().RecordMapClient(),
+		Runs:    runState{s.StateClients().Services().CoopState()},
+		Self:    own.GetSubject(),
+		Now:     time.Now,
+		Jobs:    jobRunner(s),
 	}
 	// The coop reads its own topic: it answers for pigeons that are gone and,
 	// in MOCK mode, it is the pigeon.

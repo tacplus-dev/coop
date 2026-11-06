@@ -22,9 +22,12 @@ import (
 	token_pb "github.com/tacplus-dev/coop/tacplus/types/sys/token"
 )
 
+// acme's dogs are named under its tid (their subjects) and its name (their
+// namespace claim), as kernel#23 has it: records route by the tid.
 const (
 	acme    = "/tenants/acme"
-	dogAcme = "spiffe://local.dev/tenants/acme/services/tenantecho"
+	acmeTid = "acme0001"
+	dogAcme = "spiffe://local.dev/tenants/" + acmeTid + "/services/tenantecho"
 	coopID  = "spiffe://local.dev/system/services/coop"
 )
 
@@ -70,23 +73,32 @@ func (f *fakeRuns) All(_ context.Context) (map[string]*pb.LiveRun, error) {
 }
 
 type harness struct {
-	s       *Server
-	runs    *fakeRuns
+	s    *Server
+	runs *fakeRuns
+	// store is stratum's record plane; records every row written to it.
+	store   *fakeRecords
 	msgs    []*pb.PigeonMessage
 	records []*pb.PigeonRun
 	now     time.Time
 }
 
+// newBareHarness is a harness whose server has no config yet.
+func newBareHarness() *harness {
+	h := &harness{runs: &fakeRuns{}, store: newFakeRecords(), now: time.Unix(1_700_000_000, 0)}
+	h.store.onInsert = func(r *pb.PigeonRun) { h.records = append(h.records, r) }
+	h.s = &Server{
+		Publish: func(_ context.Context, m *pb.PigeonMessage) error { h.msgs = append(h.msgs, m); return nil },
+		Records: h.store,
+		Runs:    h.runs,
+		Self:    coopID,
+		Now:     func() time.Time { return h.now },
+	}
+	return h
+}
+
 func newHarness(t *testing.T, cfg *pb.Config) *harness {
 	t.Helper()
-	h := &harness{runs: &fakeRuns{}, now: time.Unix(1_700_000_000, 0)}
-	h.s = &Server{
-		Publish:    func(_ context.Context, m *pb.PigeonMessage) error { h.msgs = append(h.msgs, m); return nil },
-		PublishRun: func(_ context.Context, r *pb.PigeonRun) error { h.records = append(h.records, r); return nil },
-		Runs:       h.runs,
-		Self:       coopID,
-		Now:        func() time.Time { return h.now },
-	}
+	h := newBareHarness()
 	if err := h.s.CoopConfig(cfg); err != nil {
 		t.Fatalf("CoopConfig: %v", err)
 	}
@@ -207,7 +219,7 @@ func TestCreatePigeonCapsAndIdempotency(t *testing.T) {
 		t.Fatalf("same caller + key must return the same run: %s vs %s", again.GetRunId(), first.GetRunId())
 	}
 	// Another dog with the same key is a different run.
-	other, err := h.s.CreatePigeon(ctx, as("spiffe://local.dev/tenants/acme/services/other", acme), r)
+	other, err := h.s.CreatePigeon(ctx, as("spiffe://local.dev/tenants/"+acmeTid+"/services/other", acme), r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +324,7 @@ func TestOwnRunIsPerCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := as("spiffe://local.dev/tenants/beta/services/tenantecho", "/tenants/beta")
+	other := as("spiffe://local.dev/tenants/beta0001/services/tenantecho", "/tenants/beta")
 	_, err = h.s.GetPigeon(ctx, other, &pb.GetPigeonRequest{RunId: tk.GetRunId()})
 	wantCode(t, err, codes.NotFound, "no run")
 	_, err = h.s.CancelPigeon(ctx, other, &pb.CancelPigeonRequest{RunId: tk.GetRunId()})
@@ -340,7 +352,7 @@ func TestOnMessageGoneAndForeignSender(t *testing.T) {
 	}
 	// A message from someone other than the run's caller is dropped silently.
 	n := len(h.msgs)
-	if err := h.s.OnMessage(ctx, h.toPigeon(tk, "spiffe://local.dev/tenants/acme/services/other", "echo.ping"), nil); err != nil || len(h.msgs) != n {
+	if err := h.s.OnMessage(ctx, h.toPigeon(tk, "spiffe://local.dev/tenants/"+acmeTid+"/services/other", "echo.ping"), nil); err != nil || len(h.msgs) != n {
 		t.Fatalf("foreign sender: %v %d", err, len(h.msgs)-n)
 	}
 
@@ -492,16 +504,9 @@ func (r *traceRunner) Reconcile(context.Context, *pb.Config, map[string]*pb.Live
 // jobsHarness is a harness in MODE_JOBS over a traceRunner.
 func jobsHarness(t *testing.T, r *traceRunner, cfg *pb.Config) *harness {
 	t.Helper()
-	h := &harness{runs: &fakeRuns{}, now: time.Unix(1_700_000_000, 0)}
+	h := newBareHarness()
 	r.self = coopID
-	h.s = &Server{
-		Publish:    func(_ context.Context, m *pb.PigeonMessage) error { h.msgs = append(h.msgs, m); return nil },
-		PublishRun: func(_ context.Context, rec *pb.PigeonRun) error { h.records = append(h.records, rec); return nil },
-		Runs:       h.runs,
-		Jobs:       r,
-		Self:       coopID,
-		Now:        func() time.Time { return h.now },
-	}
+	h.s.Jobs = r
 	cfg.Mode = pb.Mode_MODE_JOBS
 	if err := h.s.CoopConfig(cfg); err != nil {
 		t.Fatalf("CoopConfig: %v", err)
@@ -509,8 +514,9 @@ func jobsHarness(t *testing.T, r *traceRunner, cfg *pb.Config) *harness {
 	return h
 }
 
-// wantTrace: wantMsgs messages and wantRecs records were published since
-// msgs[m] and records[r], and every one of them carries trace.
+// wantTrace: wantMsgs messages were published and wantRecs records written
+// since msgs[m] and records[r], and every one of them, and every request to
+// the record store, carries trace.
 func (h *harness) wantTrace(t *testing.T, trace string, m, r, wantMsgs, wantRecs int) {
 	t.Helper()
 	if got := len(h.msgs) - m; got != wantMsgs {
@@ -527,6 +533,11 @@ func (h *harness) wantTrace(t *testing.T, trace string, m, r, wantMsgs, wantRecs
 	for _, rec := range h.records[r:] {
 		if rec.GetTraceId() != trace {
 			t.Fatalf("record carries trace_id %q, want %q: %v", rec.GetTraceId(), trace, rec)
+		}
+	}
+	for _, req := range h.store.inserts[len(h.store.inserts)-wantRecs:] {
+		if req.GetTraceId() != trace {
+			t.Fatalf("InsertIfAbsentPigeonRun carries trace_id %q, want %q: %v", req.GetTraceId(), trace, req)
 		}
 	}
 }

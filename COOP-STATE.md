@@ -263,3 +263,22 @@ Next:
 - Slice 2 as designed: MODE_JOBS — client-go Job per pigeon, MintWorkload identity, the
   lease file (`lease_names` → FailedPrecondition until then), pigeons
   namespace RBAC. Then the generic pigeon host.
+
+## 2026-11-06 — PigeonRun through Stratum's write surface (#5)
+
+Stratum is per tenant and ingests nothing from the event bus
+(tacplus-dev/stratum#2), so the coop no longer publishes PigeonRun:
+
+- **Written, not published.** Each transition is `InsertIfAbsentPigeonRun` on
+  the record plane (`query.RecordMap`, wired by `(spec.record_read)`), with
+  `s2s_write`/`s2s_read`/`s2s_subscribe` granted to the coop alone and
+  `durability: DURABILITY_LOCAL` declared. The PigeonRunBus publish and
+  stratum's subscribe grant are gone; PigeonMessage stays on the bus.
+- **Routed by the dog's tid.** `target_tenant` is the tid in the dog's SPIFFE
+  subject (`/tenants/<tid>/services/<dog>`); its namespace claim keeps the
+  tenant's name (kernel#23) and is the row's `tenant_namespace`, which the
+  tenant's Stratum holds to its own. A dog in no tenant gets no run.
+- **Record first, then live state.** A refused write (UNAVAILABLE while the
+  redo is unreachable, FAILED_PRECONDITION, ABORTED) leaves the live run as it
+  was and reaches the dog with its code. A retry at the same seq finds its row
+  (ALREADY_EXISTS, then Get): the same transition is done, another is ABORTED.

@@ -55,11 +55,12 @@ type Runner interface {
 
 // Server is the coop.
 type Server struct {
-	// Publish is the generated PigeonMessage publisher; PublishRun the
-	// generated PigeonRun record publisher. main wires both.
-	Publish    func(context.Context, *pb.PigeonMessage) error
-	PublishRun func(context.Context, *pb.PigeonRun) error
-	Runs       RunState
+	// Publish is the generated PigeonMessage publisher; Records the
+	// generated record plane client PigeonRun rows are written through
+	// (records.go). main wires both.
+	Publish func(context.Context, *pb.PigeonMessage) error
+	Records RunRecords
+	Runs    RunState
 	// Jobs runs pigeons in MODE_JOBS; nil when the coop has no Kubernetes
 	// client, and the mode is then refused rather than pretended.
 	Jobs Runner
@@ -251,7 +252,7 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 		BudgetMicros:   req.GetBudgetMicros(),
 		LeaseNames:     req.GetLeaseNames(),
 	}, req.GetTraceId()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "recording the run: %v", err)
+		return nil, storeError(err, "recording the run")
 	}
 
 	runner := s.runner(cfg)
@@ -262,7 +263,7 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 	}
 	run.PigeonSpiffeId = pigeonID
 	if err := s.transition(ctx, run, pb.RunState_RUN_STATE_STARTING, pb.EndReason_END_REASON_UNSPECIFIED, nil, req.GetTraceId()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "recording the run: %v", err)
+		return nil, storeError(err, "recording the run")
 	}
 	return ticket(run), nil
 }
@@ -284,7 +285,7 @@ func (s *Server) CancelPigeon(ctx context.Context, caller *servicemanager.Caller
 		reason = pb.EndReason_END_REASON_KILLED
 	}
 	if err := s.end(ctx, run, reason, strings.ToLower(strings.TrimPrefix(reason.String(), "END_REASON_")), req.GetTraceId()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "ending the run: %v", err)
+		return nil, storeError(err, "ending the run")
 	}
 	return &pb.CancelPigeonResponse{}, nil
 }
@@ -319,16 +320,16 @@ func (s *Server) ownRun(ctx context.Context, caller *servicemanager.Caller, runI
 
 // ---------------------------------------------------------------- lifecycle
 
-// transition moves a run to state, writes it, and puts the transition on the
-// record; extra carries the request-time fields the first record keeps, and
-// trace the trace_id of what caused the transition.
+// transition moves a run to state, puts the transition on the record, then
+// writes the live run; extra carries the request-time fields the first record
+// keeps, and trace the trace_id of what caused the transition. The record goes
+// first: a transition stratum refuses (its redo unreachable, say) leaves the
+// live run as it was, and one whose live run write fails is retried at the
+// same seq, which record finds already done.
 func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunState, reason pb.EndReason, extra *pb.PigeonRun, trace string) error {
 	run.State = state
 	run.EndReason = reason
 	run.Seq++
-	if err := s.Runs.Put(ctx, run); err != nil {
-		return fmt.Errorf("writing live run %s: %w", run.GetRunId(), err)
-	}
 	rec := &pb.PigeonRun{
 		RecordId:        fmt.Sprintf("%s/%d", run.GetRunId(), run.GetSeq()),
 		RunId:           run.GetRunId(),
@@ -348,8 +349,11 @@ func (s *Server) transition(ctx context.Context, run *pb.LiveRun, state pb.RunSt
 	if extra != nil {
 		rec.TaskDigest, rec.AllowedDomains, rec.BudgetMicros, rec.LeaseNames = extra.TaskDigest, extra.AllowedDomains, extra.BudgetMicros, extra.LeaseNames
 	}
-	if err := s.PublishRun(ctx, rec); err != nil {
-		return fmt.Errorf("publishing PigeonRun %s: %w", rec.GetRecordId(), err)
+	if err := s.record(ctx, rec); err != nil {
+		return fmt.Errorf("recording PigeonRun %s: %w", rec.GetRecordId(), err)
+	}
+	if err := s.Runs.Put(ctx, run); err != nil {
+		return fmt.Errorf("writing live run %s: %w", run.GetRunId(), err)
 	}
 	return nil
 }

@@ -10,9 +10,10 @@ src: proto
 depends:
   # kernel.Mint: MintWorkload/RevokeWorkload for a pigeon's identity (slice 2).
   - kernel
-  # the PigeonMessage topic and the PigeonRun record publish through eventbus.
+  # the PigeonMessage topic publishes through eventbus.
   - eventbus
-  # PigeonRun records are stored by stratum.
+  # PigeonRun records are written to stratum through its record write surface
+  # (#5); nothing is published on the bus for stratum to store.
   - stratum
 # pkg is derived from go.mod; the output segment must be "tacplus".
 output-dir: tacplus
