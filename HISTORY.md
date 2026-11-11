@@ -7,3 +7,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-06 looper issue Declare the tacplus floor: 2.4 (#1)
 - 2026-11-06 looper issue tacplus floor 2.5 is behind the latest released line (2.6): move the floor to 2.6 and commit tacplus.lock (#8, e4fe5d1)
 - 2026-11-06 looper issue Base image: bump alpine:3.22 to the latest line, alpine:3.24 (#3)
+- 2026-11-06 looper issue Write records to Stratum through its write surface: Stratum no longer ingests them from the event bus (#5, de2177d)
