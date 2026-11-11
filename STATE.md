@@ -1,9 +1,9 @@
 # State: coop
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by the looper (#5).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-11 by the looper (#9).
 
-- **Version / line:** unreleased (no vX.Y.Z tag); tacplus floor 2.6, pinned to 2.6.1 in `tacplus.lock` (#8; stratum declares 2.6, so 2.5 cannot resolve `depends`)
-- **Works:** `just gates` passes in the looper with its stock `tacplus` (tacplus 2.6.1, the `tacplus.lock` pin, in the `build:2.6` image, which has Go; #8): generation, tidy, gofmt, build, vet, test. MODE_MOCK only (see README).
+- **Version / line:** v0.1.1 (patch on v0.1.0: the pin move below, #9); tacplus floor 2.6, pinned to 2.6.8 in `tacplus.lock` (build:2.6.8 by digest, go1.27.4, fixing GO-2026-6859 in go1.27.3's net/http; #9. #8: stratum declares 2.6, so 2.5 cannot resolve `depends`)
+- **Works:** `just gates` passes in the looper with its stock `tacplus` (tacplus 2.6.8, the `tacplus.lock` pin, in its `build:2.6.8` image, which has Go; #8, #9): generation, tidy, gofmt, build, vet, test. MODE_MOCK only (see README).
 - **Released / deployed:** nowhere.
 - **Records (#5):** `PigeonRun` is inserted into the dog's tenant's Stratum through its record write surface (`InsertIfAbsentPigeonRun`, `target_tenant` = the tid in the dog's SPIFFE subject, durability LOCAL), read back with `GetPigeonRun` when a retried transition finds its row there; nothing is published on the bus for Stratum. Not run against a live per-tenant Stratum.
 - **Known gaps:** MODE_JOBS (Kubernetes Job per pigeon) not built.
