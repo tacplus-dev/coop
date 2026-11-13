@@ -70,4 +70,37 @@ it covers.
 ## Gates
 
 `just gates` regenerates `tacplus/`, checks that generation left every tracked file alone and that
-`go.mod`/`go.sum` are tidy for it, then runs `gofmt`, `go build`, `go vet` and `go test` over the module.
+`go.mod`/`go.sum` are tidy for it, then runs `gofmt`, `go build`, `go vet` and `go test` over the module, and
+the release scripts' tests (`ci/release_test.sh`).
+
+## Releases
+
+coop is released by version, `vMAJOR.MINOR.PATCH`, and fleets pin a release line (`MAJOR.MINOR`;
+tacplus-dev/tacplus#180). It stays on `0.x` until SeaBeam's launch, when `1.0.0` is cut: on `0.x` a minor may
+break, a patch never does. A fix merged to main is released as a patch, a feature as a minor, by the run that
+merged it. Patches to an older line are tagged on its `release/MAJOR.MINOR` branch.
+
+To cut a release, tag the commit on main (or on the line's `release/MAJOR.MINOR` branch) and push the tag:
+
+```sh
+git tag -a v0.1.1 -m "coop 0.1.1: <what changed>" <commit>
+git push origin v0.1.1
+```
+
+The tag starts `.github/workflows/release.yml`. It runs `just gates` on the tag in the build image
+`tacplus.lock` pins (`ci/build-image.sh`), builds `coop` and the launcher for each platform and the
+`Dockerfile` over them (labelled with the version and the commit), and pushes
+`ghcr.io/tacplus-dev/coop:X.Y.Z` with `GITHUB_TOKEN`. It moves the line tag `X.Y` only when this is the line's
+highest release, so the line tag never moves backwards and a patch on one line never moves another
+(`ci/release-tags.sh`). Then it creates the GitHub release with the commits since the previous release
+(`ci/release-notes.sh`), marked Latest only when it is the highest release of all (`ci/release-latest.sh`). A
+pre-release (`vX.Y.Z-rc.N`) gets only its own image tag. The image is built for `PLATFORMS` in the workflow:
+`arm64`, what the fleets run on. amd64 is off, as in the fleets; `arm64 amd64` builds both, one image. The
+package is public, so pulls need no credential.
+
+Run the workflow by hand (`gh workflow run release.yml -f version=vX.Y.Z`) for a dry run: it builds the
+version (tagging this commit locally if the tag does not exist yet) and prints the image tags and the notes
+that release would get, and publishes nothing. With `-f publish=true` it publishes an existing tag that has no
+GitHub release yet, built from the tag with this workflow's scripts: this is how `v0.1.0`, tagged before the
+workflow existed, was published. A tag is never moved or deleted. `just release-test` (part of `just gates`)
+tests the scripts.
