@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/tacplus-dev/coop/internal/bootstrap"
 	"github.com/tacplus-dev/coop/internal/coop"
 	loggerchassis "github.com/tacplus-dev/coop/tacplus/chassis/logger"
 	"github.com/tacplus-dev/coop/tacplus/chassis/token"
@@ -127,7 +128,7 @@ func jobRunner(s *sm.ServiceManager) coop.Runner {
 		zap.L().Warn("kubernetes client; MODE_JOBS unavailable", zap.Error(err))
 		return nil
 	}
-	bootstrap, err := os.ReadFile(os.Getenv("BOOTSTRAP_CONFIG"))
+	bootstrapConfig, err := bootstrap.Read(os.Getenv("BOOTSTRAP_CONFIG"))
 	if err != nil {
 		zap.L().Warn("reading BOOTSTRAP_CONFIG for pigeons; MODE_JOBS unavailable", zap.Error(err))
 		return nil
@@ -142,7 +143,7 @@ func jobRunner(s *sm.ServiceManager) coop.Runner {
 	return &coop.JobRunner{
 		Client:         client,
 		Mint:           s.Grpc().Clients().Services().MintClient(),
-		Bootstrap:      bootstrap,
+		Bootstrap:      bootstrapConfig,
 		FleetNamespace: strings.TrimSpace(string(ns)),
 	}
 }
