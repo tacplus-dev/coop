@@ -11,3 +11,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-07 looper issue Gates fail on main: stratum needs tacplus 2.5; move the floor from 2.4 to 2.5 (#6)
 - 2026-11-15 looper release v0.1.1 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.1)
 - 2026-11-15 looper issue gosec G703 (HIGH, CWE-22) at cmd/coop/main.go:130: os.ReadFile(os.Getenv("BOOTSTRAP_CONFIG")) fails the build's security checks (#12)
+- 2026-11-15 looper release v0.1.2 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.2)
