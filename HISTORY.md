@@ -14,3 +14,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-15 looper release v0.1.2 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.2)
 - 2026-11-15 looper issue STATE.md Blocked on names closed tacplus-dev/tacplus#313: name tacplus-dev/tacplus#327 (traced helpers, 2.7) instead (#10, f111dc3)
 - 2026-11-15 looper issue STATE.md Blocked on still names the closed tacplus-dev/tacplus#313 (as history): the Blocked-on check reads it as a blocker; name only tacplus-dev/tacplus#327 and #7 (#13, fdea07d)
+- 2026-11-15 looper release v0.1.3 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.3)
