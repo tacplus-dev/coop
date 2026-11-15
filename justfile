@@ -43,8 +43,12 @@ build: generate
 test: build
   go test ./...
 
+# The release scripts (.github/workflows/release.yml) against scratch repositories and a fake docker.
+release-test:
+  ci/release_test.sh
+
 # The gates every change passes before it is pushed.
-gates: check-generated test
+gates: check-generated test release-test
 
 clean:
   rm -rf tacplus coop

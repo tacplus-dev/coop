@@ -70,4 +70,6 @@ it covers.
 ## Gates
 
 `just gates` regenerates `tacplus/`, checks that generation left every tracked file alone and that
-`go.mod`/`go.sum` are tidy for it, then runs `gofmt`, `go build`, `go vet` and `go test` over the module.
+`go.mod`/`go.sum` are tidy for it, then runs `gofmt`, `go build`, `go vet` and `go test` over the module, and
+the release scripts' tests (`ci/release_test.sh`, `just release-test`: the image tags a release gets, Latest,
+its notes and the image build, against scratch repositories and a fake docker).
