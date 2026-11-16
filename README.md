@@ -73,3 +73,46 @@ it covers.
 `go.mod`/`go.sum` are tidy for it, then runs `gofmt`, `go build`, `go vet` and `go test` over the module, and
 the release scripts' tests (`ci/release_test.sh`, `just release-test`: the image tags a release gets, Latest,
 its notes and the image build, against scratch repositories and a fake docker).
+
+## Releases
+
+coop is released by version, and fleets pin a release line, `MAJOR.MINOR`, which is always that line's
+highest patch ([tacplus#180](https://github.com/tacplus-dev/tacplus/issues/180)). Versions are `0.x` until
+SeaBeam's launch (2026-12-01), when `1.0.0` is cut; on `0.x` a minor may break, a patch never does.
+
+A change merged to main is released by the same run that merged it: a fix as the next patch, a feature as the
+next minor. To cut one, from the commit to release (a green commit of main):
+
+```sh
+git tag -a v0.1.4 -m v0.1.4   # vMAJOR.MINOR.PATCH; a patch to an older line is tagged on release/MAJOR.MINOR
+git push origin v0.1.4
+```
+
+The tag runs [release.yml](.github/workflows/release.yml), on an arm64 runner: the gates on the tag, in the
+build image its `tacplus.lock` pins ([ci/build-image.sh](ci/build-image.sh)), the static `coop` binary for
+each platform ([ci/release-binaries.sh](ci/release-binaries.sh)) and the [launcher](https://github.com/tacplus-dev/launcher)
+it runs under (built from source at `LAUNCHER_COMMIT` in release.yml), then the Dockerfile as
+`ghcr.io/tacplus-dev/coop:<version>` for linux/arm64 ([ci/release-image.sh](ci/release-image.sh); amd64 is off,
+as in the fleets: `PLATFORMS` in release.yml turns it on), labelled with the version and commit
+(`org.opencontainers.image.version`, `.revision`). `:<MAJOR.MINOR>` moves to it only when it is the line's
+highest patch, so the line tag never goes backwards and no other line moves ([ci/release-tags.sh](ci/release-tags.sh)).
+The GitHub release carries the binaries (`coop-linux-<arch>`, `SHA256SUMS`) and the commits since the previous
+release ([ci/release-notes.sh](ci/release-notes.sh)), and is marked Latest only when it is the highest release
+of all ([ci/release-latest.sh](ci/release-latest.sh)). A pre-release (`v0.2.0-rc.1`) publishes only its own
+tag. The package is public, and the workflow's last step pulls the image with no credential to prove it.
+
+Running the workflow by hand publishes a tag that already exists, as its push would have
+(`gh workflow run release.yml -f version=v0.1.0 -f publish=true`; v0.1.0 to v0.1.3, tagged before the
+workflow existed, were published this way, highest first). Without `publish` it is a dry run
+(`gh workflow run release.yml -f version=v0.1.4`): it builds the tag, or this commit tagged locally as a
+version not tagged yet, prints the image tags and notes that release would get, and publishes nothing. A
+looper's token cannot dispatch a workflow (no `actions: write`), so it sends the same as the
+`repository_dispatch` event `release`:
+
+```sh
+gh api repos/tacplus-dev/coop/dispatches --input - <<'EOF'
+{"event_type": "release", "client_payload": {"version": "v0.1.0", "publish": "true"}}
+EOF
+```
+
+The scripts are tested by `ci/release_test.sh`, in `just gates`.
