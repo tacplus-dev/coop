@@ -17,3 +17,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-15 looper release v0.1.3 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.3)
 - 2026-11-15 looper issue GO-2026-6859 (net/http, stdlib) reachable: the pinned build:2.6.1 compiles with go1.27.3; move tacplus.lock to 2.6.8 (go1.27.4) (#9, b4bbe34)
 - 2026-11-16 looper issue Release: tag vMAJOR.MINOR.PATCH (start at v0.1.0) and publish its image (#2)
+- 2026-11-16 looper issue semgrep github-actions-mutable-action-tag (MEDIUM, 6 new): release.yml:54,94,99,110,111,112 use actions by tag, not SHA (#2) (#11)
