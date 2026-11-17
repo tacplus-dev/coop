@@ -99,4 +99,19 @@ image arm64 0.1.1 abc123
 check "no tags: the dry run pushes nothing" "$(grep -c 'push=true\|imagetools' "$scratch/docker.log" || true)" "0"
 check "an unknown platform is refused" "$(image "arm64 s390x" 0.1.1 abc123 2>/dev/null && echo built || echo refused)" "refused"
 
+# The launcher the Dockerfile ships: a release at or after v0.1.0, the first whose health probe verifies the
+# child's certificate (tacplus-dev/launcher#7, #14), each platform's binary pinned by its sha256; and a probe
+# it passes, the chassis's plaintext health_probe_port, since 8443 (TLS) with no HEALTH_CA fails every probe.
+dockerfile="$ci/../Dockerfile"
+launcher="$(sed -n -E 's/^ARG LAUNCHER_VERSION=(v[0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "$dockerfile")"
+check "the launcher is a release at or after v0.1.0" \
+  "$([[ -n "$launcher" ]] && printf '%s\n' v0.1.0 "$launcher" | sort -V -C && echo yes || echo "no: [$launcher]")" "yes"
+for a in amd64 arm64; do
+  check "the launcher's $a binary is pinned by sha256" \
+    "$(grep -c -E "^ADD --checksum=sha256:[0-9a-f]{64} .*/releases/download/\\\$\{LAUNCHER_VERSION\}/launcher-linux-$a /launcher$" "$dockerfile")" "1"
+done
+check "the launcher is no longer taken from beside the Dockerfile" "$(grep -c 'COPY launcher-linux' "$dockerfile" || true)" "0"
+check "the probe is the plaintext health port" "$(grep -o -E 'HEALTH_PORT=[0-9]+' "$dockerfile")" "HEALTH_PORT=8444"
+check "the plaintext probe has no CA" "$(grep -c 'HEALTH_CA=' "$dockerfile" || true)" "0"
+
 exit "$failed"

@@ -90,8 +90,11 @@ git push origin v0.1.4
 
 The tag runs [release.yml](.github/workflows/release.yml), on an arm64 runner: the gates on the tag, in the
 build image its `tacplus.lock` pins ([ci/build-image.sh](ci/build-image.sh)), the static `coop` binary for
-each platform ([ci/release-binaries.sh](ci/release-binaries.sh)) and the [launcher](https://github.com/tacplus-dev/launcher)
-it runs under (built from source at `LAUNCHER_COMMIT` in release.yml), then the Dockerfile as
+each platform ([ci/release-binaries.sh](ci/release-binaries.sh)), then the Dockerfile, with the
+[launcher](https://github.com/tacplus-dev/launcher) it runs under (the release `LAUNCHER_VERSION`, each
+binary pinned by the sha256 of that release's `checksums.txt`; its health probe is the chassis's plaintext
+`health_probe_port`, 8444: #14; release.yml still builds a launcher from source at `LAUNCHER_COMMIT` into the
+build context, which the Dockerfile no longer reads, until a person with the `workflows` permission removes it), as
 `ghcr.io/tacplus-dev/coop:<version>` for linux/arm64 ([ci/release-image.sh](ci/release-image.sh); amd64 is off,
 as in the fleets: `PLATFORMS` in release.yml turns it on), labelled with the version and commit
 (`org.opencontainers.image.version`, `.revision`). `:<MAJOR.MINOR>` moves to it only when it is the line's
