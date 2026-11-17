@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Jody Scott
+# SPDX-License-Identifier: Apache-2.0
+#
+# The security findings coop accepts, read by the build's security checks (looper-scan, tacplus-dev/looper#49):
+# each entry has exactly an id, a reason, who decided and when it expires (YYYY-MM-DD); an expired one fails the
+# checks again. An entry matches its id wherever the rule fires, so each reason says where it applies.
+exceptions:
+  - id: DS-0026
+    reason: "trivy's No HEALTHCHECK, rule-wide for coop's Dockerfiles: Kubernetes ignores a Dockerfile HEALTHCHECK and health comes from the operator's liveness and readiness probes; inside the image the launcher (PID 1) polls grpc.health.v1 on HEALTH_PORT and kills a child that is not serving (#15)"
+    decided_by: "jodydadescott (hub, 2026-11-17, #15)"
+    expires: 2027-05-17
