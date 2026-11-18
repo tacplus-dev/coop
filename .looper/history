@@ -1,0 +1,1 @@
+- 2026-11-18 looper issue trivy DS-0001 (MEDIUM, new) at Dockerfile:24: FROM launcher-${TARGETARCH} names a stage through an ARG, which trivy reads as an untagged image (#16)
