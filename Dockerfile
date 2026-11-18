@@ -13,17 +13,16 @@
 ARG BASE_IMAGE=alpine:3.24
 ARG LAUNCHER_VERSION=v0.1.0
 
-FROM scratch AS launcher-amd64
+# One stage holds both platforms' binaries, each under its own name; the image copies
+# its own platform's (TARGETARCH). No FROM names a stage through an ARG, which trivy
+# reads as an untagged image (DS-0001, #16).
+FROM scratch AS launcher
 ARG LAUNCHER_VERSION
-ADD --checksum=sha256:903693ab56879b5a5b54779c3e20efa3ddd5f1269fb0c2274882befb7df69e0f --chmod=755 https://github.com/tacplus-dev/launcher/releases/download/${LAUNCHER_VERSION}/launcher-linux-amd64 /launcher
-
-FROM scratch AS launcher-arm64
-ARG LAUNCHER_VERSION
-ADD --checksum=sha256:f07933da11e08812afa87d814ecbd187087f20c2af7f62d0c1d356754643ec16 --chmod=755 https://github.com/tacplus-dev/launcher/releases/download/${LAUNCHER_VERSION}/launcher-linux-arm64 /launcher
-
-FROM launcher-${TARGETARCH} AS launcher
+ADD --checksum=sha256:903693ab56879b5a5b54779c3e20efa3ddd5f1269fb0c2274882befb7df69e0f --chmod=755 https://github.com/tacplus-dev/launcher/releases/download/${LAUNCHER_VERSION}/launcher-linux-amd64 /launcher-linux-amd64
+ADD --checksum=sha256:f07933da11e08812afa87d814ecbd187087f20c2af7f62d0c1d356754643ec16 --chmod=755 https://github.com/tacplus-dev/launcher/releases/download/${LAUNCHER_VERSION}/launcher-linux-arm64 /launcher-linux-arm64
 
 FROM ${BASE_IMAGE}
+ARG TARGETARCH
 ARG VERSION=0.0.0
 ARG VCS_REF=local
 LABEL org.opencontainers.image.title="coop" \
@@ -33,7 +32,7 @@ LABEL org.opencontainers.image.title="coop" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/coop"
 RUN apk add --no-cache ca-certificates && adduser -D -u 65532 app
 COPY bin/coop /usr/local/bin/coop
-COPY --from=launcher /launcher /usr/local/bin/launcher
+COPY --from=launcher /launcher-linux-${TARGETARCH} /usr/local/bin/launcher
 USER 65532
 # The launcher's probe is plaintext or verified TLS, never TLS unverified
 # (launcher v0.1.0, tacplus-dev/launcher#7): it probes the chassis's plaintext

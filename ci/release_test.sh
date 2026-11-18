@@ -108,8 +108,17 @@ check "the launcher is a release at or after v0.1.0" \
   "$([[ -n "$launcher" ]] && printf '%s\n' v0.1.0 "$launcher" | sort -V -C && echo yes || echo "no: [$launcher]")" "yes"
 for a in amd64 arm64; do
   check "the launcher's $a binary is pinned by sha256" \
-    "$(grep -c -E "^ADD --checksum=sha256:[0-9a-f]{64} .*/releases/download/\\\$\{LAUNCHER_VERSION\}/launcher-linux-$a /launcher$" "$dockerfile")" "1"
+    "$(grep -c -E "^ADD --checksum=sha256:[0-9a-f]{64} .*/releases/download/\\\$\{LAUNCHER_VERSION\}/launcher-linux-$a /launcher-linux-$a$" "$dockerfile")" "1"
 done
+check "the image's launcher is its own platform's binary" \
+  "$(grep -c -x 'COPY --from=launcher /launcher-linux-${TARGETARCH} /usr/local/bin/launcher' "$dockerfile")" "1"
+check "TARGETARCH is declared in the stage that copies it" \
+  "$(sed -n '/^FROM \${BASE_IMAGE}$/,$p' "$dockerfile" | grep -c -x 'ARG TARGETARCH')" "1"
+# trivy reads a FROM whose name is built from an ARG as an untagged image (DS-0001, #16): only
+# ${BASE_IMAGE}, whose default is tagged, may be one.
+check "no FROM names an image or stage through a variable but \${BASE_IMAGE}" \
+  "$(grep -E '^FROM ' "$dockerfile" | grep -F '$' | grep -v -c -x 'FROM ${BASE_IMAGE}' || true)" "0"
+check "the base image's default is tagged" "$(grep -c -E '^ARG BASE_IMAGE=[^:@ ]+[:@][^ ]+$' "$dockerfile")" "1"
 check "the launcher is no longer taken from beside the Dockerfile" "$(grep -c 'COPY launcher-linux' "$dockerfile" || true)" "0"
 check "the probe is the plaintext health port" "$(grep -o -E 'HEALTH_PORT=[0-9]+' "$dockerfile")" "HEALTH_PORT=8444"
 check "the plaintext probe has no CA" "$(grep -c 'HEALTH_CA=' "$dockerfile" || true)" "0"
