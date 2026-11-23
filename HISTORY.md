@@ -20,3 +20,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-16 looper issue semgrep github-actions-mutable-action-tag (MEDIUM, 6 new): release.yml:54,94,99,110,111,112 use actions by tag, not SHA (#2) (#11)
 - 2026-11-17 looper issue Security checks: new non-blocking trivy DS-0026 (LOW), the Dockerfile has no HEALTHCHECK: fix or except (#15)
 - 2026-11-17 looper issue Release image runs launcher c54ae30, before launcher#7's fix of its TLS health probe skipping certificate verification (gosec G402, HIGH) (#14)
+- 2026-11-18 looper issue trivy DS-0001 (MEDIUM, new) at Dockerfile:24: FROM launcher-${TARGETARCH} names a stage through an ARG, which trivy reads as an untagged image (#16)
