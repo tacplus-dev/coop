@@ -115,10 +115,21 @@ check "the image's launcher is its own platform's binary" \
 check "TARGETARCH is declared in the stage that copies it" \
   "$(sed -n '/^FROM \${BASE_IMAGE}$/,$p' "$dockerfile" | grep -c -x 'ARG TARGETARCH')" "1"
 # trivy reads a FROM whose name is built from an ARG as an untagged image (DS-0001, #16): only
-# ${BASE_IMAGE}, whose default is tagged, may be one.
+# ${BASE_IMAGE}, whose default is tagged and pinned by digest, may be one.
 check "no FROM names an image or stage through a variable but \${BASE_IMAGE}" \
   "$(grep -E '^FROM ' "$dockerfile" | grep -F '$' | grep -v -c -x 'FROM ${BASE_IMAGE}' || true)" "0"
-check "the base image's default is tagged" "$(grep -c -E '^ARG BASE_IMAGE=[^:@ ]+[:@][^ ]+$' "$dockerfile")" "1"
+check "the base image's default is tagged and pinned by digest" \
+  "$(grep -c -E '^ARG BASE_IMAGE=[^:@ ]+:[^:@ ]+@sha256:[0-9a-f]{64}$' "$dockerfile")" "1"
+# Every image the release builds from is pinned by digest, never a floating tag (roadmap
+# decisions/security-gates-ship-only-2026-11-23.md, point 2; #20): each FROM, ${BASE_IMAGE} read as its
+# default, is <image>:<tag>@sha256:<digest> or a stage built above. scratch is no image: nothing to pull.
+base="$(sed -n -E 's/^ARG BASE_IMAGE=(.+)$/\1/p' "$dockerfile")"
+check "every FROM is pinned by digest" \
+  "$(awk -v base="$base" 'toupper($1) == "FROM" {
+       i = 2; while ($i ~ /^--/) i++; img = $i; if (img == "${BASE_IMAGE}") img = base
+       if (img != "scratch" && !(img in stage) && img !~ /^[^:@ ]+:[^:@ ]+@sha256:[0-9a-f]{64}$/) print img
+       if (toupper($(i + 1)) == "AS") stage[$(i + 2)] = 1
+     }' "$dockerfile")" ""
 check "the launcher is no longer taken from beside the Dockerfile" "$(grep -c 'COPY launcher-linux' "$dockerfile" || true)" "0"
 check "the probe is the plaintext health port" "$(grep -o -E 'HEALTH_PORT=[0-9]+' "$dockerfile")" "HEALTH_PORT=8444"
 check "the plaintext probe has no CA" "$(grep -c 'HEALTH_CA=' "$dockerfile" || true)" "0"
