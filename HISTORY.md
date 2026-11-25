@@ -24,3 +24,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper release v0.1.6 (https://github.com/tacplus-dev/coop/releases/tag/v0.1.6)
 - 2026-11-23 looper issue STATE.md: Blocked on names closed tacplus-dev/tacplus#327; coop now waits on the 2.7.0 release (tacplus-dev/tacplus#954) (#19)
 - 2026-11-23 looper issue Pinned images behind their lines: relock (tacplus.lock: tacplus 2.6.13 → 2.6.14, and 1 more) (#18)
+- 2026-11-25 looper issue Pinned images behind their lines: relock (Dockerfile: alpine:3.24 → alpine:3.24) (#21)
