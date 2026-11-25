@@ -10,7 +10,7 @@
 # GitHub release and verified against that release's checksums.txt (the sha256 on
 # each ADD below): a mismatch fails the build. To move it, change the version and
 # both sha256s together (ci/release_test.sh checks the pin).
-ARG BASE_IMAGE=alpine:3.24
+ARG BASE_IMAGE=alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 ARG LAUNCHER_VERSION=v0.1.0
 
 # One stage holds both platforms' binaries, each under its own name; the image copies
