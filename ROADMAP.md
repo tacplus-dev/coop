@@ -8,6 +8,7 @@ Go. Unreleased; tacplus floor 2.4 (declared, #1 still open).
 
 ## Next
 - Nothing approved and unblocked; every open approved issue is in Later.
+- MODE_JOBS runs each tenant's pigeons in its own tenant namespace (#17). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
 
 ## Later
 - Declare the tacplus floor 2.4 and pass the gates on it (#1), blocked on tacplus-dev/tacplus#189
