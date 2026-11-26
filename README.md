@@ -51,8 +51,19 @@ Run ids are ULIDs; the thread id is the run id.
 - `MODE_MOCK` — no Job and no identity: the coop itself is the pigeon. On the dog's first task
   it says `Ready`, marks the run `RUNNING`, then answers with the kind's `mock_result`, a `pigeon.FromPigeon` in the coop's config (or an
   `OK` result when the kind has none). This is slice 1 and what the proof fleet runs.
-- `MODE_JOBS` — a Kubernetes Job per pigeon with a minted identity. Not built yet; the coop
-  refuses the mode rather than pretending.
+- `MODE_JOBS` — a Kubernetes Job per pigeon with a minted identity, kernel minting it under
+  the dog that asked (`<dog>/workloads/pigeon-<run>`). It needs the in-cluster Kubernetes client: a
+  coop without one refuses its runs (`FAILED_PRECONDITION`) rather than pretending.
+
+  Where a run's Job, its Secret and so its bootstrap token go (#17): `pigeons_namespaces` maps each
+  tenant (`/tenants/<t>`, the dog's token namespace, as `paused_tenants` names it) to its own
+  namespace (`tac-<deployment>-<tid>`, which the operator renders with the coop's Role there). Once it
+  has entries, a tenant with none is refused at `CreatePigeon` (`FAILED_PRECONDITION`, naming it):
+  nothing falls back to a shared namespace. While it is empty, `pigeons_namespace` holds every Job
+  (the one-namespace layout). A run keeps the namespace it started in (`LiveRun.job_namespace`), so a
+  config change never moves a live run; on start the coop reconciles every namespace it may have
+  pigeons in, and one it may not list is skipped, its runs left alone. In each, the coop needs
+  `jobs` create, get, list and delete and `secrets` create and delete.
 
 A periodic tick ends runs past `deadline_ms` (`DEADLINE`) and runs that did not report `Ready`
 within `ready_timeout_ms` (`FAILED`). Setting `paused` or `paused_tenants` kills the live runs
