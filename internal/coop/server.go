@@ -208,6 +208,12 @@ func (s *Server) CreatePigeon(ctx context.Context, caller *servicemanager.Caller
 	if cfg.GetMode() == pb.Mode_MODE_JOBS && s.Jobs == nil {
 		return nil, status.Error(codes.FailedPrecondition, "MODE_JOBS needs a Kubernetes client; this coop has none")
 	}
+	// A shared coop runs a tenant's pigeons only in that tenant's own
+	// namespace; a tenant the config names none for is refused before
+	// anything is recorded or minted, never placed in another's (#17).
+	if cfg.GetMode() == pb.Mode_MODE_JOBS && PigeonsNamespace(cfg, tenant) == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "no pigeons namespace for %s", tenant)
+	}
 
 	all, err := s.Runs.All(ctx)
 	if err != nil {

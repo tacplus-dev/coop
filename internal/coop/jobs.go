@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -48,8 +49,9 @@ type Minter interface {
 	RevokeWorkload(ctx context.Context, req *kernel_pb.WorkloadRevokeRequest, opts ...grpc.CallOption) error
 }
 
-// JobRunner is MODE_JOBS: one Kubernetes Job per pigeon in the pigeons
-// namespace, with an identity kernel mints for the run (A30 §3.2, §3.3).
+// JobRunner is MODE_JOBS: one Kubernetes Job per pigeon in its tenant's
+// pigeons namespace, with an identity kernel mints for the run (A30 §3.2,
+// §3.3).
 type JobRunner struct {
 	Client kubernetes.Interface
 	Mint   Minter
@@ -74,13 +76,35 @@ func (r *JobRunner) now() time.Time {
 
 func jobName(run *pb.LiveRun) string { return "pigeon-" + run.GetRunId() }
 
+// PigeonsNamespace is where a new run for tenant goes: its pigeons_namespaces
+// entry, or, while that map is empty (the one-namespace layout),
+// pigeons_namespace. Empty when the config names none for tenant.
+func PigeonsNamespace(cfg *pb.Config, tenant string) string {
+	if m := cfg.GetPigeonsNamespaces(); len(m) > 0 {
+		return m[tenant]
+	}
+	return cfg.GetPigeonsNamespace()
+}
+
+// jobNamespace is where a started run's Job is: the namespace pinned on it at
+// start, or pigeons_namespace for a run started before runs pinned one.
+func jobNamespace(cfg *pb.Config, run *pb.LiveRun) string {
+	if ns := run.GetJobNamespace(); ns != "" {
+		return ns
+	}
+	return cfg.GetPigeonsNamespace()
+}
+
 // Start mints the pigeon's identity, writes the run's Secret and creates its
 // Job. The pigeon's SPIFFE id is the minted token's subject.
 func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, kind *pb.Kind, _ []byte) (string, error) {
-	ns := cfg.GetPigeonsNamespace()
+	ns := PigeonsNamespace(cfg, run.GetTenantNamespace())
 	if ns == "" {
-		return "", errors.New("coop config names no pigeons_namespace")
+		return "", fmt.Errorf("coop config names no pigeons namespace for %s", run.GetTenantNamespace())
 	}
+	// Pinned before anything is created, so a start that fails part way is
+	// stopped in the namespace it began in.
+	run.JobNamespace = ns
 	if r.FleetNamespace == "" {
 		return "", errors.New("the runner knows no fleet namespace; pigeons could not resolve kernel or eventbus")
 	}
@@ -207,7 +231,7 @@ func (r *JobRunner) Start(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, 
 // Stop deletes the run's Job (foreground, so its pod and Secret go with it)
 // and revokes the pigeon's identity where kernel lets this coop, under trace.
 func (r *JobRunner) Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, trace string) error {
-	ns := cfg.GetPigeonsNamespace()
+	ns := jobNamespace(cfg, run)
 	name := jobName(run)
 	policy := metav1.DeletePropagationForeground
 	// trace: unrelated: the Kubernetes API carries no trace_id.
@@ -231,7 +255,7 @@ func (r *JobRunner) Stop(ctx context.Context, cfg *pb.Config, run *pb.LiveRun, t
 // (the pigeon crashed, or Kubernetes gave up on it) ends the run FAILED; a Job
 // that completed ends it DONE, the pigeon having exited after its result.
 func (r *JobRunner) Check(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) (bool, pb.EndReason, string, error) {
-	job, err := r.Client.BatchV1().Jobs(cfg.GetPigeonsNamespace()).Get(ctx, jobName(run), metav1.GetOptions{})
+	job, err := r.Client.BatchV1().Jobs(jobNamespace(cfg, run)).Get(ctx, jobName(run), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return true, pb.EndReason_END_REASON_FAILED, "job gone", nil
 	}
@@ -253,24 +277,48 @@ func (r *JobRunner) Check(ctx context.Context, cfg *pb.Config, run *pb.LiveRun) 
 }
 
 // Reconcile is the coop's start: a Job with no live run is deleted, and the
-// live runs with no Job are returned for the coop to end FAILED.
+// live runs with no Job are returned for the coop to end FAILED. It looks in
+// every namespace a pigeon may be in: the config's and each live run's own. A
+// Job is its run's only in the run's own namespace; elsewhere it is an orphan.
+// A namespace the coop may not list (a tenant whose pigeons RBAC is gone) is
+// skipped, and its runs are left as they are rather than ended.
 func (r *JobRunner) Reconcile(ctx context.Context, cfg *pb.Config, live map[string]*pb.LiveRun) ([]*pb.LiveRun, error) {
-	ns := cfg.GetPigeonsNamespace()
-	jobs, err := r.Client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{LabelSelector: labelRun})
-	if err != nil {
-		return nil, fmt.Errorf("listing pigeon jobs: %w", err)
+	namespaces := map[string]bool{}
+	if m := cfg.GetPigeonsNamespaces(); len(m) > 0 {
+		for _, ns := range m {
+			namespaces[ns] = true
+		}
+	} else {
+		namespaces[cfg.GetPigeonsNamespace()] = true
 	}
-	have := map[string]bool{}
-	for _, j := range jobs.Items {
-		id := j.Labels[labelRun]
-		run, ok := live[id]
-		if ok && run.GetState() != pb.RunState_RUN_STATE_ENDED {
-			have[id] = true
+	for _, run := range live {
+		if run.GetState() != pb.RunState_RUN_STATE_ENDED {
+			namespaces[jobNamespace(cfg, run)] = true
+		}
+	}
+	delete(namespaces, "")
+	have, skipped := map[string]bool{}, map[string]bool{}
+	for ns := range namespaces {
+		jobs, err := r.Client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{LabelSelector: labelRun})
+		if apierrors.IsForbidden(err) || apierrors.IsNotFound(err) {
+			zap.L().Warn("skipping a pigeons namespace the coop may not list", zap.String("namespace", ns), zap.Error(err))
+			skipped[ns] = true
 			continue
 		}
-		policy := metav1.DeletePropagationForeground
-		if err := r.Client.BatchV1().Jobs(ns).Delete(ctx, j.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("deleting orphan job %s: %w", j.Name, err)
+		if err != nil {
+			return nil, fmt.Errorf("listing pigeon jobs in %s: %w", ns, err)
+		}
+		for _, j := range jobs.Items {
+			id := j.Labels[labelRun]
+			run, ok := live[id]
+			if ok && run.GetState() != pb.RunState_RUN_STATE_ENDED && jobNamespace(cfg, run) == ns {
+				have[id] = true
+				continue
+			}
+			policy := metav1.DeletePropagationForeground
+			if err := r.Client.BatchV1().Jobs(ns).Delete(ctx, j.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("deleting orphan job %s/%s: %w", ns, j.Name, err)
+			}
 		}
 	}
 	var missing []*pb.LiveRun
@@ -278,7 +326,7 @@ func (r *JobRunner) Reconcile(ctx context.Context, cfg *pb.Config, live map[stri
 		if run.GetState() == pb.RunState_RUN_STATE_ENDED || run.GetState() == pb.RunState_RUN_STATE_REQUESTED {
 			continue
 		}
-		if !have[id] {
+		if !have[id] && !skipped[jobNamespace(cfg, run)] {
 			missing = append(missing, run)
 		}
 	}

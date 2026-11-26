@@ -5,15 +5,22 @@ package coop
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/tacplus-dev/coop/tacplus/chassis/token"
 	pb "github.com/tacplus-dev/coop/tacplus/types/services/coop"
@@ -227,5 +234,252 @@ func TestJobRunnerStopCheckReconcile(t *testing.T) {
 	}
 	if _, err := client.BatchV1().Jobs(cfg.PigeonsNamespace).Get(ctx, "pigeon-01kept", metav1.GetOptions{}); err != nil {
 		t.Fatalf("live run's job was deleted: %v", err)
+	}
+}
+
+// A shared coop serves two tenants, each with its own pigeons namespace.
+const (
+	globex    = "/tenants/globex"
+	dogGlobex = "spiffe://local.dev/tenants/globex01/services/tenantecho"
+)
+
+func twoTenantCfg() *pb.Config {
+	cfg := jobsCfg()
+	cfg.PigeonsNamespace = "schematic-pigeons"
+	cfg.PigeonsNamespaces = map[string]string{acme: "tac-seatrials-acme0001", globex: "tac-seatrials-globex01"}
+	return cfg
+}
+
+func globexRun(id string, state pb.RunState) *pb.LiveRun {
+	r := liveRun(id, state)
+	r.TenantNamespace, r.CallerSpiffeId = globex, dogGlobex
+	return r
+}
+
+// jobsIn lists the pigeon Jobs and Secrets in ns by name.
+func jobsIn(t *testing.T, client *fake.Clientset, ns string) (jobs, secrets []string) {
+	t.Helper()
+	ctx := context.Background()
+	jl, err := client.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jl.Items {
+		jobs = append(jobs, j.Name)
+	}
+	sl, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sl.Items {
+		secrets = append(secrets, s.Name)
+	}
+	return jobs, secrets
+}
+
+func TestJobRunnerRunsEachTenantInItsOwnNamespace(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewClientset()
+	mint := &fakeMint{}
+	r := &JobRunner{Client: client, Mint: mint, FleetNamespace: "tac-seatrials", Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	cfg := twoTenantCfg()
+
+	a := liveRun("01aaa", pb.RunState_RUN_STATE_REQUESTED)
+	idA, err := r.Start(ctx, cfg, a, cfg.Kinds[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := globexRun("01bbb", pb.RunState_RUN_STATE_REQUESTED)
+	idB, err := r.Start(ctx, cfg, b, cfg.Kinds[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each run's Job and Secret are in its own tenant's namespace, and only
+	// there; its identity is its own dog's.
+	for _, c := range []struct {
+		run        *pb.LiveRun
+		id, dog    string
+		own, other string
+	}{
+		{a, idA, dogAcme, "tac-seatrials-acme0001", "tac-seatrials-globex01"},
+		{b, idB, dogGlobex, "tac-seatrials-globex01", "tac-seatrials-acme0001"},
+	} {
+		name := "pigeon-" + c.run.GetRunId()
+		if c.run.GetJobNamespace() != c.own || c.id != c.dog+"/workloads/"+name {
+			t.Fatalf("run %s: job namespace %q, pigeon %q", c.run.GetRunId(), c.run.GetJobNamespace(), c.id)
+		}
+		if _, err := client.BatchV1().Jobs(c.own).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Fatalf("run %s's job is not in %s: %v", c.run.GetRunId(), c.own, err)
+		}
+		if _, err := client.CoreV1().Secrets(c.own).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Fatalf("run %s's secret is not in %s: %v", c.run.GetRunId(), c.own, err)
+		}
+		if _, err := client.BatchV1().Jobs(c.other).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			t.Fatalf("run %s's job is in the other tenant's %s", c.run.GetRunId(), c.other)
+		}
+		if _, err := client.CoreV1().Secrets(c.other).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			t.Fatalf("run %s's secret is in the other tenant's %s", c.run.GetRunId(), c.other)
+		}
+	}
+	if jobs, secrets := jobsIn(t, client, "schematic-pigeons"); len(jobs)+len(secrets) != 0 {
+		t.Fatalf("the one-namespace layout's namespace is used beside the map: %v %v", jobs, secrets)
+	}
+	// A tenant with no entry is refused before its identity is minted.
+	other := liveRun("01ccc", pb.RunState_RUN_STATE_REQUESTED)
+	other.TenantNamespace = "/tenants/initech"
+	if _, err := r.Start(ctx, cfg, other, cfg.Kinds[0], nil); err == nil || !strings.Contains(err.Error(), "/tenants/initech") {
+		t.Fatalf("unmapped tenant: %v", err)
+	}
+	if len(mint.minted) != 2 {
+		t.Fatalf("an unmapped tenant's pigeon was minted: %d mints", len(mint.minted))
+	}
+
+	// A config change after start moves no live run: Check and Stop go to the
+	// namespace the run started in.
+	moved := twoTenantCfg()
+	moved.PigeonsNamespaces = map[string]string{acme: "tac-seatrials-elsewhere", globex: "tac-seatrials-acme0001"}
+	a.State, b.State = pb.RunState_RUN_STATE_RUNNING, pb.RunState_RUN_STATE_RUNNING
+	if ended, _, detail, err := r.Check(ctx, moved, a); err != nil || ended {
+		t.Fatalf("a's job is not found where it started: ended=%v %q %v", ended, detail, err)
+	}
+	if err := r.Stop(ctx, moved, b, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.BatchV1().Jobs("tac-seatrials-globex01").Get(ctx, "pigeon-01bbb", metav1.GetOptions{}); err == nil {
+		t.Fatal("stop did not delete b's job in its own namespace")
+	}
+	if _, err := client.BatchV1().Jobs("tac-seatrials-acme0001").Get(ctx, "pigeon-01aaa", metav1.GetOptions{}); err != nil {
+		t.Fatalf("stopping b touched a's namespace: %v", err)
+	}
+}
+
+func TestJobRunnerReconcilesEveryTenantNamespace(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewClientset()
+	r := &JobRunner{Client: client, Mint: &fakeMint{}, FleetNamespace: "tac-seatrials", Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	cfg := twoTenantCfg()
+
+	kept := liveRun("01kept", pb.RunState_RUN_STATE_REQUESTED)
+	if _, err := r.Start(ctx, cfg, kept, cfg.Kinds[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	kept.State = pb.RunState_RUN_STATE_RUNNING
+	orphan := globexRun("01orphan", pb.RunState_RUN_STATE_REQUESTED)
+	if _, err := r.Start(ctx, cfg, orphan, cfg.Kinds[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	// A Job with a live run's label in a namespace that is not the run's is
+	// not that run's pigeon: it is deleted, and the run is missing.
+	stray := globexRun("01stray", pb.RunState_RUN_STATE_REQUESTED)
+	if _, err := r.Start(ctx, cfg, stray, cfg.Kinds[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	stray.State, stray.JobNamespace = pb.RunState_RUN_STATE_RUNNING, "tac-seatrials-acme0001"
+	lost := globexRun("01lost", pb.RunState_RUN_STATE_STARTING)
+	lost.JobNamespace = "tac-seatrials-globex01"
+
+	missing, err := r.Reconcile(ctx, cfg, map[string]*pb.LiveRun{"01kept": kept, "01lost": lost, "01stray": stray})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range missing {
+		ids = append(ids, m.GetRunId())
+	}
+	sort.Strings(ids)
+	if strings.Join(ids, ",") != "01lost,01stray" {
+		t.Fatalf("missing %v", ids)
+	}
+	if jobs, _ := jobsIn(t, client, "tac-seatrials-globex01"); len(jobs) != 0 {
+		t.Fatalf("orphans survived in globex's namespace: %v", jobs)
+	}
+	if jobs, _ := jobsIn(t, client, "tac-seatrials-acme0001"); len(jobs) != 1 || jobs[0] != "pigeon-01kept" {
+		t.Fatalf("acme's namespace after reconcile: %v", jobs)
+	}
+
+	// A namespace the coop may not list (its tenant's RBAC is gone) is
+	// skipped, and its runs are left alone rather than ended.
+	client.PrependReactor("list", "jobs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "tac-seatrials-globex01" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "batch", Resource: "jobs"}, "", errors.New("no role"))
+		}
+		return false, nil, nil
+	})
+	missing, err = r.Reconcile(ctx, cfg, map[string]*pb.LiveRun{"01kept": kept, "01lost": lost})
+	if err != nil {
+		t.Fatalf("a forbidden namespace failed the coop's start: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("runs in an unlistable namespace were ended: %v", missing)
+	}
+}
+
+func TestJobRunnerOneNamespaceLayout(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewClientset()
+	r := &JobRunner{Client: client, Mint: &fakeMint{}, FleetNamespace: "schematic", Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	cfg := jobsCfg()
+	run := globexRun("01one", pb.RunState_RUN_STATE_REQUESTED)
+	if _, err := r.Start(ctx, cfg, run, cfg.Kinds[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	if run.GetJobNamespace() != "schematic-pigeons" {
+		t.Fatalf("job namespace %q", run.GetJobNamespace())
+	}
+	// A run started before job_namespace existed is in pigeons_namespace.
+	run.JobNamespace, run.State = "", pb.RunState_RUN_STATE_RUNNING
+	if ended, _, _, err := r.Check(ctx, cfg, run); err != nil || ended {
+		t.Fatalf("pre-#17 run: ended=%v %v", ended, err)
+	}
+	if missing, err := r.Reconcile(ctx, cfg, map[string]*pb.LiveRun{"01one": run}); err != nil || len(missing) != 0 {
+		t.Fatalf("pre-#17 run reconciled: %v %v", missing, err)
+	}
+	cfg.PigeonsNamespace = ""
+	if _, err := r.Start(ctx, cfg, globexRun("01none", pb.RunState_RUN_STATE_REQUESTED), cfg.Kinds[0], nil); err == nil || !strings.Contains(err.Error(), "no pigeons namespace") {
+		t.Fatalf("no namespace at all: %v", err)
+	}
+}
+
+// A shared coop, end to end: each tenant's CreatePigeon puts its Job, its
+// Secret and its stored run in its own namespace, never the other's; a tenant
+// with no namespace is refused before anything is recorded or minted.
+func TestSharedCoopCreatesEachRunInItsTenantNamespace(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewClientset()
+	mint := &fakeMint{}
+	h := newBareHarness()
+	h.s.Jobs = &JobRunner{Client: client, Mint: mint, FleetNamespace: "tac-seatrials", Now: func() time.Time { return h.now }}
+	cfg := twoTenantCfg()
+	cfg.Kinds[0].MaxDeadlineMs = 600_000
+	if err := h.s.CoopConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ta, err := h.s.CreatePigeon(ctx, as(dogAcme, acme), h.request("echo.ping"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb, err := h.s.CreatePigeon(ctx, as(dogGlobex, globex), h.request("echo.ping"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ta.GetPigeonSpiffeId() != dogAcme+"/workloads/pigeon-"+ta.GetRunId() || tb.GetPigeonSpiffeId() != dogGlobex+"/workloads/pigeon-"+tb.GetRunId() {
+		t.Fatalf("identities %q %q", ta.GetPigeonSpiffeId(), tb.GetPigeonSpiffeId())
+	}
+	for ns, want := range map[string]string{"tac-seatrials-acme0001": "pigeon-" + ta.GetRunId(), "tac-seatrials-globex01": "pigeon-" + tb.GetRunId()} {
+		jobs, secrets := jobsIn(t, client, ns)
+		if len(jobs) != 1 || jobs[0] != want || len(secrets) != 1 || secrets[0] != want {
+			t.Fatalf("%s holds jobs %v secrets %v, want only %s", ns, jobs, secrets, want)
+		}
+	}
+	if h.runs.runs[ta.GetRunId()].GetJobNamespace() != "tac-seatrials-acme0001" || h.runs.runs[tb.GetRunId()].GetJobNamespace() != "tac-seatrials-globex01" {
+		t.Fatalf("stored runs do not pin their namespaces: %v %v", h.runs.runs[ta.GetRunId()], h.runs.runs[tb.GetRunId()])
+	}
+
+	before := len(h.runs.runs)
+	_, err = h.s.CreatePigeon(ctx, as("spiffe://local.dev/tenants/initech1/services/tenantecho", "/tenants/initech"), h.request("echo.ping"))
+	wantCode(t, err, codes.FailedPrecondition, "no pigeons namespace for /tenants/initech")
+	if len(h.runs.runs) != before || len(mint.minted) != 2 {
+		t.Fatalf("a refused tenant left a run (%d, was %d) or a mint (%d)", len(h.runs.runs), before, len(mint.minted))
 	}
 }

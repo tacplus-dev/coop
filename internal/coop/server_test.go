@@ -508,6 +508,7 @@ func jobsHarness(t *testing.T, r *traceRunner, cfg *pb.Config) *harness {
 	r.self = coopID
 	h.s.Jobs = r
 	cfg.Mode = pb.Mode_MODE_JOBS
+	cfg.PigeonsNamespace = "pigeons" // its default, as mockCfg spells out the others
 	if err := h.s.CoopConfig(cfg); err != nil {
 		t.Fatalf("CoopConfig: %v", err)
 	}
